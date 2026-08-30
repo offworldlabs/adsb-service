@@ -1,12 +1,12 @@
 # RETINA ADS-B Fusion and Serving System
 
 **Implementation specification**  
-**Document version:** 1.2  
+**Document version:** 1.3  
 **Status:** Proposed implementation baseline  
 **Date:** 2026-08-26  
 **Audience:** RETINA backend, node-platform, solver, infrastructure, security, QA, and operations teams
 
-**Revision history:** 1.0 initial draft. 1.1 (2026-08-26): provider trust defaults and ADSBHub contribution rules (§4.1, §10.5, §12.4, §13.1); precision-association eligibility and quality-flag registry (§14.2); bandwidth budget, default region radius, and update decimation (§15.1, §15.8, §25.2); timestamp-quantization and jump-check fixes (§10.4, §12.3, §13.6, §16.4); cross-source history and queue/replay-ring fixes (§15.6, §16.3, §17); `GetRegionAtTime` (§11, §16.4); selection-boundary hysteresis (§13.4); gated acceptance criteria (§29); Mender/secure-element alignment (§20.5, §21.1). 1.2 (2026-08-26): binding requirements extracted to the companion `RETINA_ADSB_NORMATIVE_CORE.md`, which governs on conflict; this document now carries architecture, rationale, and operational guidance.
+**Revision history:** 1.0 initial draft. 1.1 (2026-08-26): provider trust defaults and ADSBHub contribution rules (§4.1, §10.5, §12.4, §13.1); precision-association eligibility and quality-flag registry (§14.2); bandwidth budget, default region radius, and update decimation (§15.1, §15.8, §25.2); timestamp-quantization and jump-check fixes (§10.4, §12.3, §13.6, §16.4); cross-source history and queue/replay-ring fixes (§15.6, §16.3, §17); `GetRegionAtTime` (§11, §16.4); selection-boundary hysteresis (§13.4); gated acceptance criteria (§29); Mender/secure-element alignment (§20.5, §21.1). 1.2 (2026-08-26): binding requirements extracted to the companion `RETINA_ADSB_NORMATIVE_CORE.md`, which governs on conflict; this document now carries architecture, rationale, and operational guidance. 1.3 (2026-08-26): consistency fixes — `SELECTION_REASON_OTHER_SOURCE_EXPIRED` emission rule and hysteresis-branch reachability note (§13.4); `category` assigned to the `IDENTITY` group (§9.3); absent-`Region` request semantics (§16.2, §16.4); v1 handling of `Subscribe` resume fields (§15.5); distribution listen-port clarification (§18.2).
 
 ---
 
@@ -420,12 +420,12 @@ Fusion occurs on atomic groups, not arbitrary scalar fields:
 | `GROUND_VECTOR` | ground speed, true track | Same kinematic sample where possible |
 | `VERTICAL_RATE_BARO` | barometric vertical rate | Separate reference |
 | `VERTICAL_RATE_GEOM` | geometric vertical rate | Separate reference |
-| `IDENTITY` | callsign | Slow-changing metadata |
+| `IDENTITY` | callsign, aircraft category | Slow-changing metadata |
 | `SQUAWK_EMERGENCY` | squawk, emergency, SPI/alert | Safety/status group |
 | `NAVIGATION` | selected altitude/heading/modes | Optional v1 pass-through |
 | `AIR_DATA` | IAS, TAS, Mach, headings | Optional v1 pass-through |
 
-An output aircraft state may legitimately contain groups from different sources and times. Every populated group MUST include its own metadata.
+An output aircraft state may legitimately contain groups from different sources and times. Every populated group MUST include its own metadata. `category` belongs to the `IDENTITY` group and shares its metadata (`Identity.callsign_meta` in the §11 contract) and the callsign/category TTL row (§14.3); it does not carry a separate `ObservationMeta`.
 
 ---
 
@@ -965,6 +965,8 @@ select(local, central, current, now):
   return younger (SELECTION_REASON_MATERIALLY_FRESHER)
 ```
 
+When exactly one candidate is eligible and the other candidate exists but failed eligibility solely because its effective age exceeded the group’s selection TTL, the selection reason is `SELECTION_REASON_OTHER_SOURCE_EXPIRED` instead of `SELECTION_REASON_ONLY_VALID_CANDIDATE`. The selected candidate is the same either way; the distinction is diagnostic — it separates “the other source went stale” from “the other source was never present or was invalid.”
+
 Default values for `POSITION`:
 
 - `local_preference_window_ms = 250`
@@ -977,6 +979,8 @@ Consequences:
 - Central wins if it is materially newer, local is invalid/stale, or central has clearly superior reported integrity inside the tie window.
 - Hysteresis prevents rapid source flapping but never retains an expired candidate. Tightening the tie window while central is selected (250 ms to switch away from local, 150 ms to switch back) prevents oscillation when local runs persistently near the window edge.
 - The choice is recomputed on every candidate update and expiry timer.
+
+Reachability note: with shipped defaults the explicit `CURRENT_SOURCE_HYSTERESIS` branch is unreachable — reaching it requires an age difference larger than the effective tie window yet smaller than `switch_advantage_ms`, and validation requires `switch_advantage_ms < local_preference_window_ms`. When local is currently selected the branch is unreachable under every valid configuration; when central is currently selected it takes effect only where `switch_advantage_ms > local_preference_window_ms / 2`. The tightened tie window supplies the default anti-flapping behavior; the branch is retained solely as a safeguard for such non-default configurations, and tests MUST NOT expect it to fire with defaults.
 
 ### 13.5 Group-specific behavior
 
@@ -1121,7 +1125,7 @@ To prevent churn near the region edge:
 
 `subscription_sequence` begins at 1 for each stream and increments for every server message, including snapshot frames and heartbeats. Any gap, duplicate with different payload, or regression invalidates the stream. The agent closes it and requests a fresh snapshot.
 
-`server_epoch` is a random 128-bit identifier created at state-service start. `server_event_id` is monotonic only within that epoch. v1 clients SHOULD always resnapshot after a reconnect; bounded resume MAY be enabled later when the server retains an event ring.
+`server_epoch` is a random 128-bit identifier created at state-service start. `server_event_id` is monotonic only within that epoch. v1 clients SHOULD always resnapshot after a reconnect; bounded resume MAY be enabled later when the server retains an event ring. The `Subscribe.resume_server_epoch` and `resume_event_id` fields are reserved for that future capability: v1 servers ignore them and always begin the stream with a full snapshot.
 
 ### 15.6 Backpressure
 
@@ -1161,6 +1165,7 @@ Socket owner/group and mode default to `retina-adsb:retina-solver 0660`. If loop
 ### 16.2 `GetSnapshot`
 
 - Returns a complete point-in-time set from the agent’s selected live table.
+- An omitted `region` means the agent’s entire live table, still subject to the aircraft cap below.
 - Excludes expired positions by default.
 - Includes per-group provenance and age.
 - Default maximum is 5,000 aircraft; larger results return `RESOURCE_EXHAUSTED` unless pagination is added in a later minor version.
@@ -1189,7 +1194,7 @@ Interpolation SHOULD operate in Earth-centered Earth-fixed coordinates or on a g
 
 The response MUST identify method, temporal distance, estimated uncertainty, selected source(s), and warnings. The solver decides whether the estimate is acceptable.
 
-`GetRegionAtTime` applies the same per-aircraft rules to every aircraft whose estimated position at `T` lies inside the region, omitting `UNAVAILABLE` results; the response is bounded by the §16.2 aircraft cap. It exists so detection association and label generation can query one radar timestamp with one RPC instead of one call per aircraft per frame.
+`GetRegionAtTime` applies the same per-aircraft rules to every aircraft whose estimated position at `T` lies inside the region (an omitted `region` means every tracked aircraft), omitting `UNAVAILABLE` results; the response is bounded by the §16.2 aircraft cap. It exists so detection association and label generation can query one radar timestamp with one RPC instead of one call per aircraft per frame.
 
 ### 16.5 Material-change suppression
 
@@ -1268,6 +1273,9 @@ readsb:
   reconnect_maximum: 10s
 
 distribution:
+  # Internal listener behind the edge proxy, which publishes it as TCP 443
+  # (§19). When gRPC TLS terminates directly in retina-adsb-server without an
+  # edge proxy (§6.1 S5), listen on 443 — public exposure is exactly 443/7444.
   listen: 0.0.0.0:8443
   default_radius: 150km
   maximum_radius: 800km

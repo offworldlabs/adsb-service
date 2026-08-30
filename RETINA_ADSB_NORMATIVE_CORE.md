@@ -1,7 +1,7 @@
 # RETINA ADS-B v1 — Normative Core
 
 **Companion to:** `RETINA_ADSB_IMPLEMENTATION_SPEC.md` (“the full specification”)
-**Document version:** 1.2 (the two documents version in lockstep)
+**Document version:** 1.3 (the two documents version in lockstep)
 **Status:** Binding requirement set for v1 implementation and acceptance
 **Date:** 2026-08-26
 
@@ -55,7 +55,7 @@ Fusion operates on atomic field groups, never arbitrary scalars; every populated
 | `GEOM_ALTITUDE` | geometric altitude |
 | `GROUND_VECTOR` | ground speed, true track |
 | `VERTICAL_RATE_BARO` / `VERTICAL_RATE_GEOM` | vertical rate by reference |
-| `IDENTITY` | callsign |
+| `IDENTITY` | callsign, aircraft category (shares the group’s metadata; no separate `ObservationMeta`) |
 | `SQUAWK_EMERGENCY` | squawk, emergency, SPI/alert |
 | `NAVIGATION`, `AIR_DATA` | optional v1 pass-through |
 
@@ -163,7 +163,9 @@ select(local, central, current, now):
   return younger (SELECTION_REASON_MATERIALLY_FRESHER)
 ```
 
-Defaults for `POSITION`: `local_preference_window_ms = 250`; `switch_advantage_ms = 100` (config validation MUST require `switch_advantage_ms < local_preference_window_ms`); `preferred_integrity_floor_nac_p = 5` when both sides report NACp — a tie-break floor only, distinct from precision eligibility (Section 7). Local therefore wins within 250 ms (150 ms while central is currently selected); hysteresis never retains an expired candidate; selection is recomputed on every candidate update and expiry timer (§13.4).
+When exactly one candidate is eligible and the other exists but failed eligibility solely by exceeding its selection TTL, the reason is `SELECTION_REASON_OTHER_SOURCE_EXPIRED` instead of `SELECTION_REASON_ONLY_VALID_CANDIDATE`; the selected candidate is unchanged (§13.4).
+
+Defaults for `POSITION`: `local_preference_window_ms = 250`; `switch_advantage_ms = 100` (config validation MUST require `switch_advantage_ms < local_preference_window_ms`); `preferred_integrity_floor_nac_p = 5` when both sides report NACp — a tie-break floor only, distinct from precision eligibility (Section 7). Local therefore wins within 250 ms (150 ms while central is currently selected); hysteresis never retains an expired candidate; selection is recomputed on every candidate update and expiry timer (§13.4). With these defaults the explicit `CURRENT_SOURCE_HYSTERESIS` branch is unreachable (the tightened tie window supplies the anti-flapping behavior); it takes effect only where `switch_advantage_ms > local_preference_window_ms / 2` while central is selected, and tests MUST NOT expect it to fire with defaults (§13.4).
 
 Group behavior (§13.5): position selection is independent of callsign, altitude, and velocity; a callsign change is accepted only after two matching observations or one high-confidence direct ADS-B update; emergency/status changes bypass update suppression and publish immediately.
 
@@ -216,7 +218,7 @@ Snapshot barrier (§15.2): record `barrier_event_id`; enumerate regional state a
 
 Deltas (§15.3): an `AircraftUpsert` is the complete current state (idempotent), never a sparse patch. `AircraftDelete` is sent on group expiry, region exit past hysteresis, authorization/filter change, or correction; unknown-key deletes are idempotent success. Region hysteresis (§15.4): remain until outside `radius + boundary_hysteresis_m` (10,000 m); delete after two consecutive outside observations or `boundary_exit_hold_ms` (2,000 ms), whichever confirms first.
 
-Ordering (§15.5): `subscription_sequence` starts at 1 and increments on every server message including snapshot frames and heartbeats; any gap, duplicate-with-different-payload, or regression invalidates the stream → close and resnapshot. `server_epoch` is a random 128-bit id per state-service start; event ids are monotonic only within an epoch; v1 clients SHOULD resnapshot after every reconnect.
+Ordering (§15.5): `subscription_sequence` starts at 1 and increments on every server message including snapshot frames and heartbeats; any gap, duplicate-with-different-payload, or regression invalidates the stream → close and resnapshot. `server_epoch` is a random 128-bit id per state-service start; event ids are monotonic only within an epoch; v1 clients SHOULD resnapshot after every reconnect, and v1 servers ignore the `Subscribe` resume fields and always begin with a full snapshot.
 
 Backpressure (§15.6): per-subscription queues bounded at 10,000 messages / 16 MiB; on overflow increment the slow-consumer counter, close with `RESOURCE_EXHAUSTED` and a retry hint, never block the global state loop, require a new snapshot. The server MUST coalesce queued upserts per aircraft before declaring overflow (deletes, per-aircraft ordering, and snapshot correctness preserved), so occupancy is bounded by regional aircraft count plus deletes. `acknowledged_subscription_sequence` is diagnostic-only in v1: sent at most once per heartbeat interval, never required, never used for flow control before a protocol minor defines it.
 
@@ -230,7 +232,7 @@ Heartbeat (§15.7): application heartbeat every 5 s when idle; HTTP/2 keepalive 
 
 Transport (§16.1): preferred `unix:///run/retina/adsb-agent.sock`, owner/group/mode `retina-adsb:retina-solver 0660`; loopback TCP fallback binds only `127.0.0.1`/`::1` behind an OS firewall.
 
-`GetSnapshot` (§16.2): complete point-in-time selected table; excludes expired positions by default; per-group provenance and age included; cap 5,000 aircraft (`RESOURCE_EXHAUSTED` beyond); recommended deadline 500 ms.
+`GetSnapshot` (§16.2): complete point-in-time selected table (an omitted `region` means the entire table, still subject to the cap); excludes expired positions by default; per-group provenance and age included; cap 5,000 aircraft (`RESOURCE_EXHAUSTED` beyond); recommended deadline 500 ms.
 
 `Watch` (§16.3): caller snapshots, records `local_revision`, then opens `Watch(after_local_revision)`. The agent replays matching newer events from a ring covering ≥ `watch_replay_window_ms` (30,000 ms), compacted — superseded upserts for an aircraft MAY be dropped when the newest retained upsert and all deletes are preserved — within a 10,000-event bound after compaction. Older-than-ring requests return `OUT_OF_RANGE` → new snapshot. Revision gaps are legal (region filtering, compaction); regression or two different events with one revision is a protocol error. Complete state on every material change; deletions are explicit `LocalAircraftEvent.delete`, never an empty state; slow local consumers are disconnected and resnapshot.
 
@@ -241,7 +243,7 @@ Transport (§16.1): preferred `unix:///run/retina/adsb-agent.sock`, owner/group/
 3. else extrapolate only when requested, last valid position ≤2.0 s before `T`, a valid ground vector within 2.0 s of it, and no detected discontinuity;
 4. else `NEAREST_SAMPLE` only when `allow_nearest_sample` is set, or `UNAVAILABLE`.
 
-Interpolation operates in ECEF or on a geodesic (never linearly across the antimeridian); extrapolation uses a constant-velocity great-circle model; vertical estimation never converts barometric to geometric. Responses identify method, temporal distance, estimated uncertainty, source(s), and warnings. `GetRegionAtTime` applies the same rules to every aircraft whose estimated position at `T` lies in the region, omitting `UNAVAILABLE`, bounded by the `GetSnapshot` cap — one RPC per radar timestamp instead of one per aircraft.
+Interpolation operates in ECEF or on a geodesic (never linearly across the antimeridian); extrapolation uses a constant-velocity great-circle model; vertical estimation never converts barometric to geometric. Responses identify method, temporal distance, estimated uncertainty, source(s), and warnings. `GetRegionAtTime` applies the same rules to every aircraft whose estimated position at `T` lies in the region (an omitted `region` means every tracked aircraft), omitting `UNAVAILABLE`, bounded by the `GetSnapshot` cap — one RPC per radar timestamp instead of one per aircraft.
 
 Suppression (§16.5): an event may be suppressed only if all selected values, sources, and age-class boundaries are unchanged; position updates are never suppressed merely for small coordinate change.
 
