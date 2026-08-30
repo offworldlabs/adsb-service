@@ -1,0 +1,83 @@
+# RETINA ADS-B Phase A — adsbhub-adapter configuration (DESIGN.md §4).
+#
+# Read by the `adsbhub-adapter` service (services/adsbhub_adapter/).
+# Strict YAML per spec §18.1: config_version required, unknown keys FATAL,
+# validate without opening sockets via:  adsbhub-adapter --check-config --config <file>
+#
+# Values below ARE the DESIGN.md §4 defaults (upstream block keys per spec
+# §18.2). All durations are plain numbers in SECONDS.
+
+config_version: 1
+
+# Upstream ADSBHub session (spec §6.1 S1). One long-lived outbound TCP
+# connection; ADSBHub opens port 5002 only for IPs whitelisted on the
+# profile page — see deploy/README.md prerequisites.
+adsbhub:
+  host: data.adsbhub.org
+  port: 5002
+  # Fail a connection attempt after this long (spec §18.2: 10 s).
+  connect_timeout: 10
+  # No bytes for this long => session dead, close + reconnect
+  # (ADR-0006; aligns with the §14.4 unhealthy-at-30 s threshold).
+  idle_timeout: 30
+  # Max line length enforced BEFORE allocation/parse (spec §18.2/§12.1).
+  line_max_bytes: 4096
+  # NOTE: SBS generated timestamps are ALWAYS parsed as UTC — pinned readsb
+  # hardcodes UTC (timegm, net_io.c:3153), so a timezone knob would only let
+  # the validator disagree with readsb about the same relayed bytes. The
+  # spec §18.2 `timestamp_timezone` key is therefore rejected (ADR-0006 §8).
+  # §12.2 altitude acceptance bounds, FEET (ADR-0006 §7). Lines whose
+  # altitude falls outside [altitude_min_ft, altitude_max_ft] are rejected
+  # and counted (result=invalid_range). Defaults are the §12.2 values;
+  # widen/tighten per provider, min must stay below max.
+  altitude_min_ft: -2000
+  altitude_max_ft: 100000
+  # Timestamp guard (ADR-0004): protects against readsb's silent clamp of
+  # stale/future generated timestamps to arrival time (stale would look
+  # fresh). Reject lines whose generated timestamp is more than
+  # `future_tolerance` seconds ahead of the adapter wall clock (§12.3
+  # analogue) or older than `max_record_age` seconds (well inside readsb's
+  # 20 min clamp).
+  future_tolerance: 1
+  max_record_age: 60
+  # Exponential backoff with full jitter, doubling from `initial` to
+  # `maximum`; reset after `stable_reset` seconds connected (§24; the §24
+  # 250 ms-vs-§18.2 1 s initial conflict is resolved to a configurable
+  # initial defaulting to 1 s — ADR-0006).
+  reconnect:
+    initial: 1
+    maximum: 60
+    jitter_ratio: 0.20
+    stable_reset: 60
+
+# Loopback SBS relay that readsb dials into (spec §18.3/§19: 31003,
+# loopback only). Listens ONLY while the upstream is healthy; closes all
+# client connections immediately on upstream failure (§6.1 S1).
+relay:
+  host: 127.0.0.1
+  port: 31003
+  # Send a bare CRLF this often when no data flows (readsb kills idle
+  # connectors after 120 s without bytes).
+  heartbeat_interval: 25
+  # readsb + one debug tap (bounded-everything, AI-08).
+  max_clients: 2
+  # Per-client outbound queue bound; on overflow the CLIENT is dropped
+  # and counted — backlog is never replayed as current (§33.11). Only
+  # validated lines (<= 199 B + terminator) are queued, so this line bound
+  # also enforces the DESIGN.md §4 8 MiB byte bound (worst case ~3.9 MiB).
+  client_queue_max_lines: 20000
+
+# Prometheus /metrics + /healthz + /livez HTTP listener (DESIGN.md §2:
+# interim surface, monitoring network only per spec §19).
+metrics:
+  host: 127.0.0.1
+  port: 9101
+
+# LOOPBACK ENFORCEMENT (AI-06 / spec §19): relay.host and metrics.host are
+# checked at startup — a non-loopback address refuses to start unless the
+# escape hatch below is explicitly enabled. Only set it on a host whose
+# monitoring/relay traffic genuinely rides a private (never public)
+# interface, and re-run the AC-S-01 external scan afterwards. The loader
+# implements the key (default false); it is left commented here because the
+# safe default needs no entry — uncomment only to enable it deliberately.
+# allow_nonloopback_bind: false

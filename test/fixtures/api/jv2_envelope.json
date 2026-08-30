@@ -1,0 +1,11 @@
+{
+  "ac": [
+    {"hex":"a1b2c3","type":"other","flight":"UAL123  ","alt_baro":36000,"gs":487.3,"track":271.5,"baro_rate":-64,"squawk":"3472","lat":37.619520,"lon":-122.374110,"nic":0,"rc":0,"seen_pos":3.414,"alert":0,"spi":0,"mlat":[],"tisb":[],"messages":1543,"seen":0.4,"rssi":-49.5,"dst":12.345,"dir":118.3},
+    {"hex":"a9c8e7","type":"other","flight":"SWA1234 ","alt_baro":"ground","gs":14.8,"track":88.6,"baro_rate":0,"squawk":"1200","lat":37.621110,"lon":-122.378840,"nic":0,"rc":0,"seen_pos":1.002,"alert":0,"spi":0,"mlat":[],"tisb":[],"messages":220,"seen":0.1,"rssi":-49.5,"dst":0.812,"dir":245.7}
+  ],
+  "msg": "No error",
+  "now": 1787961600432,
+  "total": 2,
+  "ctime": 1787961600432,
+  "ptime": 0
+}

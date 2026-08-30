@@ -1,0 +1,68 @@
+# RETINA ADS-B Phase A — readsb-hub (DESIGN.md §3/§8, ADR-0002/ADR-0003).
+# Pinned wiedehopf/readsb v3.16.16 d9a4c62, installed by deploy/build-readsb.sh
+# as /usr/local/bin/readsb-retina. All listeners bind loopback.
+#
+# REGENERATE, DON'T EDIT the ExecStart line (spec §18.3: the generated args
+# are the contract). To change the invocation, edit /etc/retina-adsb/readsb.yaml
+# (repo: config/readsb.yaml) and paste the output of:
+#   deploy/gen-readsb-args.py --config config/readsb.yaml --systemd
+# install.sh verifies this line against the generator and refuses on mismatch.
+
+[Unit]
+Description=RETINA ADS-B readsb hub (pinned v3.16.16 d9a4c62, SBS in / re-api out)
+Documentation=https://github.com/wiedehopf/readsb
+# Data path: the adapter owns the loopback relay readsb dials into.
+After=adsbhub-adapter.service
+Wants=adsbhub-adapter.service
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=readsb
+Group=readsb
+ExecStart=/usr/local/bin/readsb-retina --net --quiet --net-bind-address=127.0.0.1 --net-connector=127.0.0.1,31003,sbs_in --net-connector-delay=5 --max-range=99999 --write-json=/run/readsb --write-json-every=1 --json-reliable=1 --net-api-port=30152 --api-shutdown-delay=2 --write-prom=/run/readsb/stats.prom
+Restart=always
+RestartSec=5
+
+# /run/readsb: aircraft.json (tar1090) + stats.prom (metrics scrape);
+# 0755 so unprivileged readers (tar1090, node_exporter textfile) can read it.
+RuntimeDirectory=readsb
+RuntimeDirectoryMode=0755
+
+# Hardening (spec §20.1 translated to systemd — ADR-0003)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+PrivateDevices=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+MemoryDenyWriteExecute=true
+# readsb talks loopback only in Phase A (connector + all listeners);
+# relax if bind_address ever moves to a private interface.
+IPAddressAllow=localhost
+IPAddressDeny=any
+UMask=0022
+
+# Resource bounds (DESIGN.md §8)
+MemoryMax=1G
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+# Local working documents
+plan.md
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.hypothesis/
+
+*.egg-info/
+
+# Vendored reference checkouts are git submodules (see .gitmodules, vendor/VENDOR.md)

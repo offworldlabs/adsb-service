@@ -1,0 +1,36 @@
+# readsb-file-exporter — serves /run/readsb/stats.prom as
+# http://127.0.0.1:9102/metrics (fallback readsb scrape path; see
+# observability/prometheus/prometheus.yml, job "readsb").
+#
+# Install:
+#   install -D -m 0755 observability/prometheus/readsb-file-exporter.py \
+#     /usr/local/lib/retina-adsb/readsb-file-exporter.py
+#   install -m 0644 observability/prometheus/readsb-file-exporter.service \
+#     /etc/systemd/system/readsb-file-exporter.service
+#   systemctl daemon-reload && systemctl enable --now readsb-file-exporter
+
+[Unit]
+Description=RETINA ADS-B readsb stats.prom file exporter (127.0.0.1:9102)
+After=readsb-hub.service
+# Deliberately not Requires=readsb-hub: while the file is unreadable the
+# exporter answers 200 with only `readsb_stats_file_readable 0` (a non-2xx
+# scrape would set up=0), keeping the Prometheus target up and the readsb_*
+# absence signal unambiguous.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/retina-adsb/readsb-file-exporter.py /run/readsb/stats.prom
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadOnlyPaths=/run/readsb
+MemoryMax=64M
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

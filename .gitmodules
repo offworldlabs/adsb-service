@@ -1,0 +1,12 @@
+[submodule "vendor/api"]
+	path = vendor/api
+	url = https://github.com/adsblol/api
+	shallow = true
+[submodule "vendor/infra"]
+	path = vendor/infra
+	url = https://github.com/adsblol/infra
+	shallow = true
+[submodule "vendor/readsb"]
+	path = vendor/readsb
+	url = https://github.com/wiedehopf/readsb
+	shallow = true

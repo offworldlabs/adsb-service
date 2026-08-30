@@ -1,0 +1,55 @@
+# RETINA ADS-B Phase A — Prometheus scrape configuration (DESIGN.md §9).
+#
+# All targets bind loopback. Run Prometheus on this host, or reach these
+# ports over the monitoring network only — metrics/health endpoints are
+# never public ingress (spec §19 / §21.3).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  # adsbhub-adapter (DESIGN.md §2/§4): /metrics on 127.0.0.1:9101
+  # (/healthz on the same listener is for humans/systemd, not Prometheus).
+  - job_name: adsbhub-adapter
+    static_configs:
+      - targets: ["127.0.0.1:9101"]
+
+  # serving-api (DESIGN.md §2/§5): FastAPI /metrics on 127.0.0.1:8080.
+  - job_name: serving-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8080"]
+
+  # readsb-hub metrics.
+  #
+  # readsb does NOT serve Prometheus over HTTP: stats.prom is a FILE at
+  # /run/readsb/stats.prom, rewritten about once per minute
+  # (--write-prom=/run/readsb/stats.prom in readsb-hub.service).
+  # Two supported scrape paths:
+  #
+  # (a) node_exporter textfile collector — preferred where node_exporter is
+  #     already deployed: run it with
+  #         --collector.textfile.directory=/run/readsb
+  #     and the readsb_* series arrive under the node_exporter job; no
+  #     extra job is needed here (delete or ignore job "readsb" below).
+  #
+  # (b) fallback with zero extra dependencies (this file's working default):
+  #     readsb-file-exporter.py — a stdlib-only HTTP server on
+  #     127.0.0.1:9102 that serves the file as /metrics, always 200, with a
+  #     readsb_stats_file_readable 1|0 sentinel appended (0 = file missing/
+  #     unreadable: readsb down or not yet written; the target stays up)
+  #     (systemd unit: readsb-file-exporter.service, same directory).
+  #
+  # The file changes once a minute, so a slower interval is enough; values
+  # simply repeat between rewrites. Expect up to ~2 min of staleness on
+  # readsb_* series — alert windows below account for it by using the
+  # adapter's own metrics for the fast (30 s / 15 s) conditions.
+  - job_name: readsb
+    scrape_interval: 30s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:9102"]

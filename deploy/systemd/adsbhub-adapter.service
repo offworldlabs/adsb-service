@@ -1,0 +1,53 @@
+# RETINA ADS-B Phase A — adsbhub-adapter (DESIGN.md §4/§8, ADR-0003).
+# ADSBHub upstream TCP client + SBS validation + loopback relay 127.0.0.1:31003.
+# Binds loopback only; outbound to data.adsbhub.org:5002 (profile-whitelisted
+# egress IP required — see deploy/README.md).
+
+[Unit]
+Description=RETINA ADS-B ADSBHub ingest adapter (SBS validate + loopback relay)
+Documentation=file:/opt/retina-adsb/services/adsbhub_adapter
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=retina-adapter
+Group=retina-adapter
+EnvironmentFile=-/etc/retina-adsb/build.env
+ExecStart=/opt/retina-adsb/.venv/bin/adsbhub-adapter --config /etc/retina-adsb/adapter.yaml
+Restart=always
+RestartSec=5
+
+# Hardening (spec §20.1 translated to systemd — ADR-0003)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+PrivateDevices=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+UMask=0077
+
+# Resource bounds (DESIGN.md §8)
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

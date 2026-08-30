@@ -1,0 +1,10 @@
+{"ac":[
+{"hex":"ab34f0","type":"other","alt_baro":"ground","gs":14.5,"track":278.30,"lat":37.618900,"lon":-122.375050,"nic":0,"rc":0,"seen_pos":1.154,"mlat":[],"tisb":[],"messages":1,"seen":1.2,"rssi":-49.5,"dst":25.387,"dir":241.8},
+{"hex":"3c6589","type":"other","alt_baro":36000,"calc_track":312,"lat":37.820150,"lon":-121.904030,"nic":0,"rc":0,"seen_pos":1.857,"alert":0,"spi":0,"mlat":[],"tisb":[],"messages":1,"seen":1.9,"rssi":-49.5,"dst":0.000,"dir":360.0}
+]
+,"msg": "No error"
+,"now": 1788059984002
+,"total": 2
+,"ctime": 1788059984002
+,"ptime": 0
+}

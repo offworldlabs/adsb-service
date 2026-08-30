@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retina-adsb"
+version = "0.1.0"
+description = "RETINA ADS-B data plane, Phase A: ADSBHub ingest + adsb.lol-format serving"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "aiohttp>=3.9",
+    "prometheus-client>=0.20",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6",
+    "httpx>=0.27",
+    "aioresponses>=0.7",
+]
+
+[project.scripts]
+adsbhub-adapter = "adsbhub_adapter.__main__:main"
+retina-serving-api = "serving_api.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["services"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["test"]
+markers = [
+    "integration: live end-to-end tests against the built readsb binary",
+]
+addopts = "-m 'not integration'"

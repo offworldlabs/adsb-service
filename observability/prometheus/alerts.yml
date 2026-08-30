@@ -1,0 +1,234 @@
+# RETINA ADS-B Phase A — alert rules (DESIGN.md §9; spec §22.5 + §14.4).
+#
+# runbook_url values are repo-relative paths; rewrite them to your
+# operator-facing URL scheme if the runbooks are published elsewhere.
+
+groups:
+  - name: retina-adsb-provider
+    rules:
+      # spec §22.5 / §14.4 row 1: disconnected OR no valid record for 30 s
+      # (unhealthy threshold). Split into two rules under ONE alertname so
+      # each branch carries its own hold time: a shared `for: 30s` on the OR
+      # made the silent-feed branch (whose expression already encodes the
+      # 30 s window) page only at ~60 s.
+      - alert: ADSBHubDown
+        # Disconnect branch. `for: 30s` debounces brief reconnect flaps —
+        # the connected gauge really does bounce during backoff cycles.
+        expr: |
+          retina_adsb_provider_connected{provider="adsbhub"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: adsbhub-adapter
+        annotations:
+          summary: "ADSBHub upstream disconnected"
+          description: >-
+            adsbhub-adapter has had no established session to
+            data.adsbhub.org:5002 for 30 s. The loopback relay
+            (127.0.0.1:31003) closes on upstream failure, so readsb aircraft
+            will age out within ~60 s.
+          runbook_url: runbooks/adsbhub-disconnected.md
+
+      - alert: ADSBHubDown
+        # Silent-feed branch. `for: 0s` deliberately: the age expression is
+        # monotone while the feed is silent (it cannot flap mid-outage —
+        # only a fresh valid record resets it), the 30 s threshold IS the
+        # spec's own debounce, and any extra hold time would re-introduce
+        # exactly the notification lag this split removes. Pages on the
+        # first evaluation observing age > 30 s.
+        expr: |
+          (time() - retina_adsb_provider_last_record_timestamp_seconds{provider="adsbhub"}) > 30
+        for: 0s
+        labels:
+          severity: critical
+          service: adsbhub-adapter
+        annotations:
+          summary: "ADSBHub feed silent: no valid record for over 30 s"
+          description: >-
+            adsbhub-adapter has accepted no valid SBS record for over 30 s
+            (§14.4 row 1 unhealthy threshold) even though the session may
+            still be up. The loopback relay (127.0.0.1:31003) closes on
+            upstream failure, so readsb aircraft will age out within ~60 s.
+          runbook_url: runbooks/adsbhub-disconnected.md
+
+      - alert: ADSBHubDegraded
+        # spec §14.4 row 1 degraded band: no valid record for 10-30 s. The
+        # timestamp clause carries its own 10 s window, so `for: 0s` — the
+        # alert fires on the first evaluation that observes age > 10 s and
+        # mirrors the adapter /healthz "degraded" state. Warning severity
+        # only: past 30 s the critical ADSBHubDown above takes over and
+        # remains the paging alert.
+        expr: |
+          (time() - retina_adsb_provider_last_record_timestamp_seconds{provider="adsbhub"}) > 10
+        for: 0s
+        labels:
+          severity: warning
+          service: adsbhub-adapter
+        annotations:
+          summary: "ADSBHub feed degraded: no valid record for over 10 s"
+          description: >-
+            adsbhub-adapter has accepted no valid SBS record for more than
+            10 s (§14.4 row 1 degraded threshold; adapter /healthz reports
+            state "degraded" in the same band). If this persists past 30 s,
+            ADSBHubDown (critical) fires.
+          runbook_url: runbooks/adsbhub-disconnected.md
+
+      - alert: CentralStateStalled
+        # spec §14.4 row 2 (degraded 5 s, unhealthy 15 s): readsb holds no
+        # positioned aircraft WHILE provider bytes still flow. Byte-correlated
+        # on purpose — a quiet sky/empty feed must never page (§14.4,
+        # caution §33.8). `and on()` joins the two single, label-disjoint
+        # series. `for: 15s` = the unhealthy window.
+        expr: |
+          (readsb_aircraft_with_position == 0)
+          and on()
+          (rate(retina_adsb_provider_bytes_total{provider="adsbhub"}[1m]) > 0)
+        for: 15s
+        labels:
+          severity: critical
+          service: readsb-hub
+        annotations:
+          summary: "readsb has zero positioned aircraft while input bytes flow"
+          description: >-
+            Input bytes from ADSBHub are increasing but readsb-hub reports no
+            aircraft with a position. Likely an upstream format change readsb
+            rejects, or a readsb regression. Note readsb_* series lag up to
+            ~2 min (stats.prom rewritten once/min, scraped at 30 s).
+          runbook_url: runbooks/parse-error-surge.md
+
+      - alert: ParseErrorSurge
+        # spec §22.5 (threshold unspecified) + §24 row 2; recorded local
+        # choice per DESIGN.md §9 / ADR-0006: reject ratio > 5% over 5 m AND
+        # > 100 records in the window (so a trickle feed cannot trip it).
+        # Smoothing lives in the 5 m windows; `for: 10s` engages at the
+        # §14.4 row 1 degraded threshold.
+        expr: |
+          (
+            sum(rate(retina_adsb_provider_records_total{provider="adsbhub",result!="ok"}[5m]))
+            /
+            sum(rate(retina_adsb_provider_records_total{provider="adsbhub"}[5m]))
+          ) > 0.05
+          and on()
+          (sum(increase(retina_adsb_provider_records_total{provider="adsbhub"}[5m])) > 100)
+        for: 10s
+        labels:
+          severity: warning
+          service: adsbhub-adapter
+        annotations:
+          summary: "SBS validation reject ratio above 5% over 5m"
+          description: >-
+            More than 5% of ADSBHub records failed adapter validation over the
+            last 5 minutes (>100 records seen). Break down by the result label
+            (invalid_structure | invalid_range | stale | future |
+            unparseable_ts) before acting.
+          runbook_url: runbooks/parse-error-surge.md
+
+      - alert: AdapterHealthEndpointDown
+        # Not in DESIGN.md §9's three — added so a dead adapter process (or
+        # dead metrics listener) pages even though the other alerts have no
+        # series to evaluate. absent() fires once the 9101 scrape target
+        # stops yielding the connected gauge; 1 m tolerates a couple of
+        # missed 15 s scrapes.
+        expr: absent(retina_adsb_provider_connected{provider="adsbhub"})
+        for: 1m
+        labels:
+          severity: critical
+          service: adsbhub-adapter
+        annotations:
+          summary: "adsbhub-adapter metrics have vanished (process down?)"
+          description: >-
+            retina_adsb_provider_connected is absent — the adapter process or
+            its metrics listener (127.0.0.1:9101) is down, so ADSBHubDown /
+            ParseErrorSurge are blind. Treat as a provider-path outage.
+          runbook_url: runbooks/adsbhub-disconnected.md
+
+  - name: retina-adsb-host
+    # Host/resource rules (spec §24 clock-jump / memory-pressure / disk-full
+    # rows; ledger AC-O-02). HONEST DEPENDENCY NOTE: the node_* series used
+    # by ClockOffset and DiskUsage exist ONLY if node_exporter
+    # is deployed on this host (it is NOT installed by deploy/install.sh, and
+    # ClockOffset additionally assumes chrony/NTP is actually running so the
+    # kernel offset is meaningful). Without node_exporter those rules simply
+    # never fire — they do not error, they are silently blind. Deploy
+    # node_exporter (default timex + filesystem collectors suffice) to arm
+    # them.
+    rules:
+      - alert: ClockOffset
+        # REQUIRES node_exporter (timex collector) + chrony on the host.
+        # Warning: kernel-reported clock offset >100 ms for 5 m. Timestamp
+        # trust (ADR-0004) and the future_tolerance=1s guard assume a
+        # sane local clock.
+        expr: abs(node_timex_offset_seconds) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: host
+        annotations:
+          summary: "host clock offset above 100 ms for 5 m"
+          description: >-
+            node_timex_offset_seconds reports the host clock more than
+            100 ms from its sync source for 5 minutes. The adapter's
+            timestamp guard and served ages assume a chrony-disciplined
+            clock. Check chronyc tracking/sources.
+
+      - alert: ClockOffset
+        # REQUIRES node_exporter (timex collector) + chrony on the host.
+        # Critical: offset >500 ms for 2 m — served seen/seen_pos ages and
+        # the stale/future rejection guard are now materially wrong.
+        expr: abs(node_timex_offset_seconds) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+          service: host
+        annotations:
+          summary: "host clock offset above 500 ms for 2 m"
+          description: >-
+            Host clock is more than 500 ms off for 2 minutes. Adapter
+            timestamp validation (future/stale rejection) and honest-age
+            serving are unreliable until time sync recovers.
+
+      - alert: MemoryPressure
+        # Per-unit RSS vs the systemd MemoryMax=256M bound on the two
+        # Python services. Uses prometheus_client's own
+        # process_resident_memory_bytes, which both services already
+        # expose (adapter :9101, serving-api :8080) — no cgroup/container
+        # metrics are scraped in this deployment. readsb-hub (MemoryMax=1G)
+        # exposes no equivalent series; its bound is enforced only by the
+        # cgroup limit + Restart=always (a readsb OOM-kill shows up as unit
+        # restarts, not here).
+        expr: |
+          process_resident_memory_bytes{job=~"adsbhub-adapter|serving-api"}
+            > 0.85 * 256 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+          service: retina-adsb
+        annotations:
+          summary: "service RSS above 85% of its 256M MemoryMax for 5 m"
+          description: >-
+            {{ $labels.job }} resident memory is above 85% of the systemd
+            MemoryMax=256M bound. Approaching the limit means the kernel
+            OOM-kills the unit (Restart=always masks it as a restart loop).
+            Bounded-everything (AI-08) says this should never trend up —
+            investigate before the kill.
+
+      - alert: DiskUsage
+        # REQUIRES node_exporter (filesystem collector). /run/readsb
+        # (aircraft.json + stats.prom, spec §24 disk-full row) lives on the
+        # /run tmpfs; readsb rewrites files in place so usage should be
+        # flat and tiny. Filling /run breaks aircraft.json, stats.prom AND
+        # unrelated host services.
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/run"}
+            / node_filesystem_size_bytes{mountpoint="/run"}) < 0.15
+        for: 10m
+        labels:
+          severity: warning
+          service: readsb-hub
+        annotations:
+          summary: "/run tmpfs below 15% free for 10 m"
+          description: >-
+            The tmpfs backing /run/readsb is nearly full. readsb JSON/prom
+            writes will start failing (stale aircraft.json => serving /health
+            goes stale-503). Find the writer — readsb's own files are small
+            and rewritten in place.

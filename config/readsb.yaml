@@ -1,0 +1,70 @@
+# RETINA ADS-B Phase A — readsb-hub configuration (DESIGN.md §2/§3).
+#
+# THIS FILE IS THE SOURCE OF THE readsb INVOCATION. It is consumed only by
+# deploy/gen-readsb-args.py, which emits the argument vector per DESIGN.md §3
+# (spec §18.3: the deployment generates the args and verifies them — the
+# generated args are the contract). After changing anything here, regenerate
+# the frozen ExecStart line in deploy/systemd/readsb-hub.service:
+#
+#   deploy/gen-readsb-args.py --config config/readsb.yaml --systemd
+#
+# The generator REFUSES (exit 2) any config that would set --lat/--lon
+# (arms the 450 nmi range filter, drops far SBS positions) or
+# --json-separate-(alt-)ground (breaks the alt_baro:"ground" v2 envelope).
+#
+# Values below ARE the DESIGN.md defaults. Unknown keys are fatal (spec §18.1).
+
+config_version: 1
+
+# Adapter loopback SBS relay that readsb dials out to with an sbs_in
+# connector (spec §18.3 / §19: port 31003, loopback only). Must match the
+# relay block in adapter.yaml.
+relay:
+  host: 127.0.0.1
+  port: 31003
+
+# re-api HTTP listener (--net-api-port; single port only). The serving-api
+# queries http://127.0.0.1:30152/re-api/ — adsb.lol convention.
+api_port: 30152
+
+# --net-bind-address: binds EVERY readsb listener. Loopback in Phase A
+# (AI-06 / spec §19 loopback-or-private rule); the generator warns on
+# anything other than 127.0.0.1.
+bind_address: 127.0.0.1
+
+# --write-json target. The systemd unit provides it via RuntimeDirectory=readsb;
+# aircraft.json (tar1090) and stats.prom (metrics) land here.
+write_json_dir: /run/readsb
+
+# --write-json-every, seconds: bounds both aircraft.json and re-api cache
+# staleness (adds up to this much to served ages). readsb floor: 0.1 s.
+write_json_every: 1
+
+# --max-range, nmi. 99999 = effectively unlimited: worldwide aggregate,
+# SBS positions arrive pre-decoded (adsblol/infra READSB_MAX_RANGE intent).
+max_range: 99999
+
+# --net-connector-delay, seconds: readsb re-dials the closed relay this
+# often after the adapter drops it on upstream failure (default 15 s is too
+# slow for prompt post-failure re-attach).
+connector_delay: 5
+
+# --api-shutdown-delay, seconds: serve in-flight re-api queries during
+# shutdown; new ones get 503.
+api_shutdown_delay: 2
+
+# Optional loopback SBS injection listener (--net-sbs-in-port) for tests
+# and debugging only (DESIGN.md §2). DISABLED BY DEFAULT — WARNING: anything
+# written to this port reaches readsb without passing the adapter's §12.4
+# validation or the ADR-0004 stale/future timestamp guard, i.e. it bypasses
+# every ingest control and can plant fabricated or stale aircraft in the
+# served state. Enable only in test/debug overlays, never in the production
+# config (uncommenting changes the generated args — regenerate + repaste the
+# unit ExecStart line as described above).
+# sbs_debug_port: 32006
+
+# Extra readsb flags, appended verbatim after the generated vector.
+# Forbidden here (generator exits 2): --lat, --lon, --json-separate-ground,
+# --json-separate-alt-ground, --net-api-port, and duplicates of generated
+# flags. Example future use: ["--db-file=/usr/local/share/tar1090/aircraft.csv.gz"]
+extra_args: []

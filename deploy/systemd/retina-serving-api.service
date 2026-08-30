@@ -1,0 +1,54 @@
+# RETINA ADS-B Phase A — serving-api (DESIGN.md §5/§8, ADR-0003).
+# FastAPI v2 surface on 127.0.0.1:8080; public exposure ONLY via an
+# operator-enabled Q5 boundary (deploy/nginx/, default CLOSED — AC-S-01).
+
+[Unit]
+Description=RETINA ADS-B serving API (adsb.lol v2 envelope over readsb re-api)
+Documentation=file:/opt/retina-adsb/services/serving_api
+After=readsb-hub.service
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=retina-api
+Group=retina-api
+EnvironmentFile=-/etc/retina-adsb/build.env
+ExecStart=/opt/retina-adsb/.venv/bin/retina-serving-api --config /etc/retina-adsb/serving.yaml
+Restart=always
+RestartSec=5
+
+# Hardening (spec §20.1 translated to systemd — ADR-0003)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+PrivateDevices=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+# serving-api talks loopback only (bind 8080, readsb 30152, adapter 9101).
+IPAddressAllow=localhost
+IPAddressDeny=any
+UMask=0077
+
+# Resource bounds (DESIGN.md §8)
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

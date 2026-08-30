@@ -1,0 +1,71 @@
+# RETINA ADS-B Phase A — serving-api configuration (DESIGN.md §5).
+#
+# Read by the `retina-serving-api` service (services/serving_api/).
+# Strict YAML per spec §18.1: config_version required, unknown keys FATAL,
+# validate without opening sockets via:  retina-serving-api --check-config --config <file>
+#
+# Values below ARE the DESIGN.md §5 defaults. Durations are seconds.
+
+config_version: 1
+
+# HTTP listener. Loopback only — public exposure happens exclusively
+# through an operator-enabled Q5 boundary (deploy/nginx/, default CLOSED;
+# AC-S-01). A non-loopback bind.host is REFUSED at load time unless
+# allow_nonloopback_bind below is explicitly set to true.
+bind:
+  host: 127.0.0.1
+  port: 8080
+
+# Escape hatch for deliberately binding a private-network address instead of
+# fronting with nginx. Default false; leave it that way unless you have read
+# AC-S-01 and know why you need it.
+#allow_nonloopback_bind: false
+
+# readsb-hub re-api upstream. /v2 queries map to
+# {reapi_endpoint}?circle={lat},{lon},{radius}&jv2 and the body is passed
+# through verbatim (envelope built by readsb).
+reapi_endpoint: http://127.0.0.1:30152/re-api/
+
+# Shared aiohttp ClientSession timeouts (vendored reapi.py values).
+timeouts:
+  total_seconds: 5
+  connect_seconds: 1
+
+# Upper bound on a readsb re-api response body accepted by the passthrough,
+# in BYTES (bounded-everything AI-08). 33554432 = 32 MiB — far above any
+# realistic jv2 envelope; a larger upstream response is refused (502-class
+# error), never truncated or partially served.
+readsb_response_max_bytes: 33554432
+
+# adsbhub-adapter health surface, reported best-effort by GET /health.
+adapter_health_url: http://127.0.0.1:9101/healthz
+
+# /health freshness: envelope is stale when
+# wall clock - envelope `now` > staleness_factor x write_json_every_seconds.
+# write_json_every_seconds must mirror write_json_every in readsb.yaml.
+freshness:
+  write_json_every_seconds: 1
+  staleness_factor: 5
+
+# In-app token bucket per client IP, sized for ~1 Hz node polling
+# (plan §0 req 5). Excess => 429 + Retry-After. Bucket table is a bounded
+# LRU (AI-08).
+rate_limit:
+  rate_per_second: 2
+  burst: 10
+  lru_size: 10000
+  # Admission bucket for PREVIOUSLY-UNSEEN client keys: bounds how fast new
+  # clients may enter the per-client LRU, so spoofed-source churn cannot
+  # cycle established clients out of the table (§21.3). Established clients
+  # are unaffected; excess new keys get 429 like any rate-limited request.
+  new_key_rate: 50
+  new_key_burst: 200
+  # Peer IPs trusted as OUR OWN reverse proxies (the deploy/nginx fronts).
+  # For a request whose direct peer is listed here, the bucket keys on the
+  # RIGHTMOST X-Forwarded-For entry — the hop appended by that proxy; all
+  # entries left of it are client-supplied and ignored. Requests from any
+  # unlisted peer ignore X-Forwarded-For entirely (spoofable) and key on
+  # the peer address. Default: empty (no proxy trusted). With the nginx
+  # front on this same host, add the loopback address it connects from:
+  #trusted_proxies:
+  #  - 127.0.0.1
