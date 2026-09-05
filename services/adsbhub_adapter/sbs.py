@@ -5,9 +5,17 @@ net_io.c decodeSbsLine: only ``MSG``, length 20-199, >=22 comma fields,
 6-hex ICAO with optional ``~``) plus stricter range and timestamp guards,
 so misleading records are counted here and never reach readsb.
 
+ADSBHub emits the ICAO field WITHOUT leading-zero padding (``D0EEC`` for
+0D0EEC), which readsb rejects outright — so the ICAO field is accepted at
+1-6 hex chars and left-zero-padded to 6 before relay. That padding is the
+single, enumerated exception to the DESIGN.md §4 verbatim-relay rule
+(ADR-0007); every other byte of a relayed line is forwarded unchanged.
+
 Contract: bytes in, a ValidationResult out — no exception ever escapes for
 arbitrary input (spec §12.1: never terminate the stream on one bad record;
-§21.3 fuzz gate).
+§21.3 fuzz gate). ``relay_line`` carries the exact bytes to forward
+(without terminator) whenever ``relay`` is True, and re-validating them is
+a fixed point: same result, ``normalized`` False, bytes unchanged.
 """
 
 from __future__ import annotations
@@ -28,7 +36,14 @@ UNPARSEABLE_TS = "unparseable_ts"
 RESULT_LABELS = (OK, INVALID_STRUCTURE, INVALID_RANGE, STALE, FUTURE, UNPARSEABLE_TS)
 REJECT_REASONS = frozenset({INVALID_STRUCTURE, INVALID_RANGE, STALE, FUTURE})
 
-# readsb's own line acceptance window (net_io.c:3046-3049), enforced pre-relay
+# retina_adsb_provider_records_normalized_total{normalization=...}: the
+# enumerated exceptions to verbatim relay. Exactly one exists (ADR-0007).
+ICAO_ZERO_PAD = "icao_zero_pad"
+NORMALIZATION_LABELS = (ICAO_ZERO_PAD,)
+
+# readsb's own line acceptance window (net_io.c:3046-3049), enforced pre-relay;
+# MAX_LINE_BYTES is re-checked after ICAO padding (ADR-0007) because the
+# inserted zeros can push a 199-byte line past readsb's cap
 MIN_LINE_BYTES = 20
 MAX_LINE_BYTES = 199
 MIN_FIELDS = 22
@@ -61,6 +76,10 @@ class ValidationResult:
     relay: bool
     generated_ts: float | None = None
     delay: float | None = None
+    # exact bytes to forward, without CR/LF terminator; None when not relayed
+    relay_line: bytes | None = None
+    # True iff the ICAO field was left-zero-padded (ADR-0007)
+    normalized: bool = False
 
 
 def validate_line(
@@ -107,24 +126,42 @@ def _validate(raw: bytes, now: float, future_tolerance: float,
         # spec §12.4: only explicitly tested variants (MSG 1..8, golden fixtures)
         return ValidationResult(INVALID_STRUCTURE, relay=False)
     icao = fields[4]
-    body = icao[1:] if icao.startswith("~") else icao
-    if len(body) != 6 or any(c not in _HEX_DIGITS for c in body):
+    prefix, body = ("~", icao[1:]) if icao.startswith("~") else ("", icao)
+    # ADR-0007: 1-6 hex chars, not readsb's 6-7 — ADSBHub drops the leading
+    # zeros of addresses below 0x100000 (Mexico, Cuba, much of Africa).
+    if not 1 <= len(body) <= 6 or any(c not in _HEX_DIGITS for c in body):
         return ValidationResult(INVALID_STRUCTURE, relay=False)
+    normalized = len(body) < 6
+    if normalized:
+        # the sole exception to verbatim relay (DESIGN.md §4, ADR-0007):
+        # left-pad with ASCII '0' so readsb accepts the line and keys the
+        # aircraft as the '%06x' spec §9.1 demands. Case is left alone.
+        fields[4] = prefix + body.rjust(6, "0")
+        line = ",".join(fields).encode("ascii")
+        if len(line) > MAX_LINE_BYTES:
+            # the inserted zeros pushed the line past readsb's own cap
+            # (net_io.c:3046-3049), which would silently drop it — reject
+            # here instead of relaying bytes the consumer discards
+            return ValidationResult(INVALID_STRUCTURE, relay=False)
 
     if not _ranges_ok(fields, altitude_min_ft, altitude_max_ft):
-        return ValidationResult(INVALID_RANGE, relay=False)
+        return ValidationResult(INVALID_RANGE, relay=False, normalized=normalized)
 
     generated = _parse_generated_ts(fields[6], fields[7])
     if generated is None:
         # DESIGN.md §4: relay (readsb stamps arrival = conservative), count separately
-        return ValidationResult(UNPARSEABLE_TS, relay=True)
+        return ValidationResult(UNPARSEABLE_TS, relay=True,
+                                relay_line=line, normalized=normalized)
     delay = now - generated
     if generated > now + future_tolerance:
-        return ValidationResult(FUTURE, relay=False, generated_ts=generated, delay=delay)
+        return ValidationResult(FUTURE, relay=False, generated_ts=generated, delay=delay,
+                                normalized=normalized)
     if delay > max_record_age:
         # guards the readsb clamp hazard: >20 min stale gets stamped as fresh (ADR-0004)
-        return ValidationResult(STALE, relay=False, generated_ts=generated, delay=delay)
-    return ValidationResult(OK, relay=True, generated_ts=generated, delay=delay)
+        return ValidationResult(STALE, relay=False, generated_ts=generated, delay=delay,
+                                normalized=normalized)
+    return ValidationResult(OK, relay=True, generated_ts=generated, delay=delay,
+                            relay_line=line, normalized=normalized)
 
 
 def _ranges_ok(fields: list[str], altitude_min_ft: float, altitude_max_ft: float) -> bool:

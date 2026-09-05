@@ -54,6 +54,17 @@ class TestMetricNames:
         assert 'commit="abc1234"' in text
         assert 'schema_version="interim-v2"' in text
 
+    def test_normalized_series_exists_before_any_record(self):
+        # ADR-0007: the one normalization series must exist at 0 from startup,
+        # so its ratio to records_total is readable across a restart
+        m = AdapterMetrics()
+        text = exposition(m)
+        assert ('retina_adsb_provider_records_normalized_total{normalization="icao_zero_pad",'
+                'provider="adsbhub"} 0.0') in text
+        m.record_normalized("icao_zero_pad")
+        assert ('retina_adsb_provider_records_normalized_total{normalization="icao_zero_pad",'
+                'provider="adsbhub"} 1.0') in exposition(m)
+
     def test_last_record_timestamp_series_exists_before_any_record(self):
         # ops-7: after a restart with a connected-but-recordless upstream the
         # age-based alert clauses need a series, not a gap; 0 is honestly old

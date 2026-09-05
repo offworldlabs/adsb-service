@@ -27,7 +27,7 @@ BASE = NOW - 5.0
 CORPUS_EXPECTED = [
     INVALID_STRUCTURE,  # 21 fields
     INVALID_STRUCTURE,  # non-MSG (SEL)
-    INVALID_STRUCTURE,  # 5-hex ICAO
+    OK,                 # 5-hex ICAO: zero-padded, ADR-0007
     INVALID_STRUCTURE,  # NUL byte
     INVALID_STRUCTURE,  # > 199 chars
     INVALID_RANGE,      # lat 91
@@ -45,6 +45,8 @@ CORPUS_EXPECTED = [
     INVALID_RANGE,      # vrate -20001
     INVALID_RANGE,      # lon -180.5
     INVALID_RANGE,      # NaN gs
+    INVALID_STRUCTURE,  # 7-hex ICAO
+    INVALID_STRUCTURE,  # empty ICAO
 ]
 
 
@@ -54,6 +56,11 @@ def golden_lines() -> list[bytes]:
 
 def corpus_lines() -> list[bytes]:
     return [l for l in (FIXTURES / "malformed_corpus.txt").read_bytes().split(b"\n") if l]
+
+
+def unpadded_lines() -> list[bytes]:
+    # real ADSBHub lines whose ICAO field lost its leading zero (ADR-0007)
+    return (FIXTURES / "golden_icao_unpadded.txt").read_bytes().splitlines()
 
 
 def make_line(**overrides: str) -> bytes:
@@ -102,6 +109,14 @@ class TestCorpus:
             assert res.result == expected, f"corpus line {n}: {res.result} != {expected}"
             assert res.relay is (expected in (OK, UNPARSEABLE_TS))
 
+    def test_five_hex_icao_line_is_padded(self):
+        # ADR-0007: corpus line 3 carries a 5-hex ICAO, as ADSBHub emits them
+        res = check(corpus_lines()[2])
+        assert res.result == OK
+        assert res.normalized is True
+        assert res.relay_line is not None
+        assert res.relay_line.split(b",")[4] == b"0ABC12"
+
 
 class TestStructure:
     def test_extra_fields_accepted(self):
@@ -125,10 +140,10 @@ class TestStructure:
         ("3C6589", OK),
         ("abc123", OK),          # lowercase hex accepted, as in readsb
         ("~3C6589", OK),         # non-ICAO prefix
-        ("ABC12", INVALID_STRUCTURE),
+        ("ABC12", OK),           # short body: zero-padded, ADR-0007
+        ("~ABC12", OK),
         ("ABC1234", INVALID_STRUCTURE),
         ("ABC12G", INVALID_STRUCTURE),
-        ("~ABC12", INVALID_STRUCTURE),
         ("", INVALID_STRUCTURE),
         ("~~C6589", INVALID_STRUCTURE),
     ])
@@ -157,6 +172,117 @@ class TestStructure:
         # CR/LF are stripped only at the end; embedded ones are control chars
         assert check(make_line().replace(b"36000", b"36\r00")).result == INVALID_STRUCTURE
         assert check(make_line().replace(b"36000", b"36\n00")).result == INVALID_STRUCTURE
+
+
+class TestIcaoZeroPadding:
+    """ADR-0007: ADSBHub drops the leading zeros of ICAO addresses below
+    0x100000, which readsb rejects outright (net_io.c:3112 wants 6-7 chars).
+    The adapter left-pads the field to 6 hex chars — the single enumerated
+    exception to the DESIGN.md §4 verbatim relay — and nothing else changes."""
+
+    @pytest.mark.parametrize("icao,padded", [
+        ("C", "00000C"), ("EC", "0000EC"), ("EEC", "000EEC"),
+        ("0EEC", "000EEC"), ("D0EEC", "0D0EEC"),
+        ("~C", "~00000C"), ("~ABC", "~000ABC"), ("~ABC12", "~0ABC12"),
+        ("d0eec", "0d0eec"),     # case is never touched, only zeros inserted
+        ("aB", "0000aB"),
+    ])
+    def test_short_bodies_are_left_padded(self, icao: str, padded: str):
+        line = make_line(f4=icao)
+        res = check(line)
+        assert res.result == OK
+        assert res.relay is True
+        assert res.normalized is True
+        assert res.relay_line is not None
+        assert res.relay_line.split(b",")[4] == padded.encode("ascii")
+        # byte-identical except for the inserted zeros
+        assert res.relay_line.replace(padded.encode(), icao.encode(), 1) == line
+
+    def test_six_hex_relays_unchanged(self):
+        line = make_line(f4="3C6589")
+        res = check(line)
+        assert res.result == OK
+        assert res.normalized is False
+        assert res.relay_line == line
+
+    def test_trailing_terminator_is_not_part_of_relay_line(self):
+        line = make_line(f4="D0EEC")
+        for terminator in (b"\n", b"\r\n"):
+            res = check(line + terminator)
+            assert res.relay_line is not None
+            assert not res.relay_line.endswith(b"\n")
+            assert res.relay_line == check(line).relay_line
+
+    @pytest.mark.parametrize("icao", ["ABC1234", "", "~", "G0EEC", "0D0EE C", "~~ABC"])
+    def test_structural_rejects_carry_no_relay_line(self, icao: str):
+        res = check(make_line(f4=icao))
+        assert res.result == INVALID_STRUCTURE
+        assert res.relay is False
+        assert res.relay_line is None
+
+    def test_padding_past_the_length_cap_is_rejected(self):
+        # the inserted zeros push a 199-byte line to 200, which readsb drops
+        # (net_io.c:3046-3049) — reject rather than relay bytes it discards
+        base = make_line(f4="D0EEC")
+        line_199 = base + b"," + b"x" * (199 - len(base) - 1)
+        assert len(line_199) == 199
+        assert check(line_199).result == INVALID_STRUCTURE
+        assert check(line_199[:-1]).result == OK   # 198 -> 199 after padding
+
+    @pytest.mark.parametrize("overrides,expected", [
+        ({"f14": "91"}, INVALID_RANGE),
+        ({"f6": "2026/08/29", "f7": "10:00:00.000"}, STALE),
+        ({"f6": "2026/08/29", "f7": "13:00:00.000"}, FUTURE),
+    ])
+    def test_padded_but_rejected_lines_still_report_normalized(self, overrides, expected):
+        # the padding rule applied, so the counter sees it (ADR-0007): the
+        # ratio measures how much of the feed uses the unpadded spelling, not
+        # how much of it survived the rest of validation
+        res = check(make_line(f4="D0EEC", **overrides))
+        assert res.result == expected
+        assert res.relay is False
+        assert res.relay_line is None
+        assert res.normalized is True
+
+    def test_unparseable_ts_line_is_relayed_padded(self):
+        res = check(make_line(f4="D0EEC", f6="XXXX/XX/XX", f7="99:99:99.999"))
+        assert res.result == UNPARSEABLE_TS
+        assert res.relay is True
+        assert res.normalized is True
+        assert res.relay_line is not None
+        assert res.relay_line.split(b",")[4] == b"0D0EEC"
+
+    @pytest.mark.parametrize("icao", ["D0EEC", "3C6589", "~ABC"])
+    def test_relay_line_is_a_fixed_point(self, icao: str):
+        res = check(make_line(f4=icao))
+        assert res.relay_line is not None
+        again = check(res.relay_line)
+        assert again.result == res.result
+        assert again.relay is True
+        assert again.relay_line == res.relay_line
+        assert again.normalized is False
+        assert again.generated_ts == res.generated_ts
+        assert again.delay == res.delay
+
+    def test_golden_unpadded_capture(self):
+        # real ADSBHub bytes, 2026-09-05 (see fixtures README); NOW is 5 s
+        # after their generated timestamp
+        now = datetime(2026, 9, 5, 22, 4, 59, tzinfo=timezone.utc).timestamp()
+        lines = unpadded_lines()
+        assert len(lines) == 3
+        for line in lines:
+            res = check(line, now=now)
+            assert res.result == OK
+            assert res.relay is True
+            assert res.normalized is True
+            assert res.relay_line is not None
+            assert res.relay_line.split(b",")[4] == b"0D0EEC"
+            assert res.relay_line.replace(b"0D0EEC", b"D0EEC", 1) == line
+            # one pass is enough: revalidating the relayed bytes changes nothing
+            again = check(res.relay_line, now=now)
+            assert (again.result, again.relay, again.relay_line, again.normalized) == (
+                res.result, True, res.relay_line, False)
+            assert again.generated_ts == res.generated_ts and again.delay == res.delay
 
 
 class TestRanges:
@@ -384,6 +510,14 @@ class TestContract:
         for line in golden_lines() + corpus_lines():
             res = check(line)
             assert res.relay is (res.result in (OK, UNPARSEABLE_TS))
+
+    def test_relay_line_set_exactly_when_relayed(self):
+        for line in golden_lines() + corpus_lines() + unpadded_lines():
+            for candidate in (line, line + b"\r\n"):
+                res = check(candidate)
+                assert (res.relay_line is not None) is res.relay
+                if res.relay and not res.normalized:
+                    assert res.relay_line == candidate.rstrip(b"\r\n")
 
     def test_non_bytes_input_does_not_raise(self):
         assert validate_line("MSG,not,bytes", now=NOW).result == INVALID_STRUCTURE  # type: ignore[arg-type]

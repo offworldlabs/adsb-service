@@ -22,6 +22,13 @@ spec §14.4 row 2; routed here because format drift is the usual cause).
   field semantics we do not map (spec §12.4: unknown variants are counted and ignored
   until a fixture and mapping are added).
 - **Corruption**: truncated lines, control bytes, mid-line reconnect splices.
+- **Unpadded ICAO from the provider** is NOT a cause: ADSBHub omits the leading zeros
+  of addresses below 0x100000 and the adapter pads them before relay (ADR-0007). Watch
+  `retina_adsb_provider_records_normalized_total{normalization="icao_zero_pad"}` — a
+  sudden change in its ratio to `records_total` (baseline ≈2.5% of records) is a
+  provider-format-change signal in its own right, in either direction: a drop to zero
+  means the provider started padding, a jump means a new address block or a new
+  field-shape.
 - **Clock trouble** (`stale`/`future` results): upstream receiver clock skew, or OUR
   wall clock is wrong — check `timedatectl` before blaming the provider.
 
@@ -33,13 +40,17 @@ spec §14.4 row 2; routed here because format drift is the usual cause).
    ```
    | result | meaning | typical cause |
    |---|---|---|
-   | `invalid_structure` | not MSG / field count <22 / bad ICAO / length / control bytes | format change, corruption, new variant |
+   | `invalid_structure` | not MSG / field count <22 / bad ICAO (0, >6 hex, non-hex) / length / control bytes | format change, corruption, new variant |
    | `invalid_range` | field outside spec §12.2 ranges | unit/format change in a numeric field |
    | `stale` | generated ts older than `max_record_age` (60 s) | provider backlog replay, clock skew |
    | `future` | generated ts > 1 s ahead of wall clock | upstream or local clock skew |
    | `unparseable_ts` | fields 7/8 unparseable (still relayed, counted) | timestamp format change |
 2. Cross-check readsb's view (adapter-passed lines readsb still rejects):
    `curl -sS 127.0.0.1:9102/metrics | grep basestation`
+   Also read the normalization counter alongside the result breakdown:
+   ```
+   curl -sS 127.0.0.1:9101/metrics | grep 'retina_adsb_provider_records_normalized_total'
+   ```
 3. **Bounded diagnostic capture** (spec §21.5: never log payloads by default; a capture
    requires operator reason, duration limit, access audit, deletion schedule).
    The adapter knob (DESIGN.md §4, `diagnostics` block of the adapter config —

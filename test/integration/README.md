@@ -45,7 +45,7 @@ tail is dumped.
 | `test_honest_seen_pos` | **plan §0 req 1**: 3.0 s of injected upstream lag appears in served `seen_pos` (≥ 3.0) — honest age including upstream+ingest latency |
 | `test_quantization_measurement` | spec §10.4: a 7 ms generated-timestamp offset is preserved end-to-end (`seen_pos` deltas exactly 7 ms) ⇒ `source_timestamp_quantization_ms` = 1 ms; result recorded into `docs/readsb-pin.md` so the number regenerates on any readsb upgrade |
 | `test_stale_guard` | ADR-0004: a 120 s-old record is rejected (`records_total{result="stale"}`) and never appears in the served state — readsb's silent stale-looks-fresh clamp cannot be reached |
-| `test_malformed_resilience` | spec §12.1: the 20-line malformed corpus is dropped + counted by reason while the stream, the relay connection, and serving continue uninterrupted |
+| `test_malformed_resilience` | spec §12.1: the 22-line malformed corpus is dropped + counted by reason (bar the 5-hex-ICAO line, padded per ADR-0007) while the stream, the relay connection, and serving continue uninterrupted |
 | `test_rate_limit` | plan §0 req 5: hammering `/v2` above the configured rate yields 429 + `Retry-After` |
 | `test_relay_closes_on_upstream_failure` | spec §6.1 S1: upstream kill ⇒ adapter `/healthz` 503, relay listener refuses connections, served `seen_pos` only grows (no fresh data manufactured); upstream restart ⇒ full recovery, fresh data flows |
 | `test_health_chain` | `/health` composition: 200 with the full chain up, 503 once readsb stops |

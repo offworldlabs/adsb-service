@@ -24,7 +24,7 @@ from prometheus_client import (
     generate_latest,
 )
 
-from .sbs import RESULT_LABELS
+from .sbs import NORMALIZATION_LABELS, RESULT_LABELS
 
 PROVIDER = "adsbhub"
 # spec §14.4 row 1: 'ADSBHub no valid record' degraded at 10 s, unhealthy at 30 s
@@ -68,6 +68,10 @@ class AdapterMetrics:
             "retina_adsb_provider_records_total",
             "SBS records seen, by validation result",
             ["provider", "result"], registry=reg)
+        self.records_normalized_total = Counter(
+            "retina_adsb_provider_records_normalized_total",
+            "Records whose bytes the adapter normalized, by normalization rule (ADR-0007)",
+            ["provider", "normalization"], registry=reg)
         self.last_record_timestamp_seconds = Gauge(
             "retina_adsb_provider_last_record_timestamp_seconds",
             "Unix time of the last valid record",
@@ -101,6 +105,8 @@ class AdapterMetrics:
         self.last_record_timestamp_seconds.labels(provider).set(0)
         for result in RESULT_LABELS:
             self.records_total.labels(provider, result).inc(0)
+        for normalization in NORMALIZATION_LABELS:
+            self.records_normalized_total.labels(provider, normalization).inc(0)
 
     def set_connected(self, up: bool) -> None:
         self.connected.labels(self.provider).set(1 if up else 0)
@@ -110,6 +116,11 @@ class AdapterMetrics:
 
     def record(self, result: str) -> None:
         self.records_total.labels(self.provider, result).inc()
+
+    def record_normalized(self, normalization: str) -> None:
+        # spec §21 metrics cardinality: the label is the fixed rule name, never
+        # an aircraft key
+        self.records_normalized_total.labels(self.provider, normalization).inc()
 
     def set_last_record(self, unix_seconds: float) -> None:
         self.last_record_timestamp_seconds.labels(self.provider).set(unix_seconds)

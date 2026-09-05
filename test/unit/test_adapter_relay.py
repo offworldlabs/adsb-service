@@ -27,6 +27,14 @@ def fresh_line(index: int = 2) -> bytes:
     return ",".join(fields).encode("ascii")
 
 
+def unpadded_line(index: int = 2) -> bytes:
+    """A fresh golden line whose ICAO field lost its leading zero, exactly as
+    ADSBHub emits addresses below 0x100000 (ADR-0007)."""
+    fields = fresh_line(index).decode("ascii").split(",")
+    fields[4] = "D0EEC"
+    return ",".join(fields).encode("ascii")
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -139,6 +147,50 @@ class TestAdapterRelayLifecycle:
             assert (await asyncio.wait_for(reader2.readline(), 3.0)).startswith(b"MSG,6,")
             writer2.close()
             conn2.close()
+        finally:
+            adapter.request_stop()
+            await asyncio.wait_for(run_task, 5.0)
+            await upstream.stop()
+
+    async def test_unpadded_icao_is_relayed_padded_and_counted(self):
+        """ADR-0007: the ICAO field is left-zero-padded before relay — the one
+        enumerated exception to verbatim forwarding — the original terminator
+        is preserved byte for byte, and the line counts both as a normal ok
+        record and on records_normalized_total{normalization="icao_zero_pad"}."""
+        upstream = FakeUpstream()
+        await upstream.start()
+        relay_port = free_port()
+        adapter = Adapter(adapter_config(upstream.port, relay_port))
+
+        def count(result: str) -> float:
+            return adapter.metrics.records_total.labels("adsbhub", result)._value.get()
+
+        def normalized() -> float:
+            return adapter.metrics.records_normalized_total.labels(
+                "adsbhub", "icao_zero_pad")._value.get()
+
+        # ops-7 style pre-initialization: the series is 0, not missing
+        assert normalized() == 0.0
+        run_task = asyncio.create_task(adapter.run())
+        try:
+            conn = await upstream.accept()
+            await send(conn, fresh_line() + b"\r\n")  # first valid line opens the relay
+            await wait_until(lambda: adapter.relay.listening)
+            reader, writer = await asyncio.open_connection("127.0.0.1", relay_port)
+
+            for terminator in (b"\r\n", b"\n"):
+                wire_line = unpadded_line()
+                await send(conn, wire_line + terminator)
+                received = await asyncio.wait_for(reader.readline(), 3.0)
+                assert received.split(b",")[4] == b"0D0EEC"
+                # only the zero inserted; same terminator as received upstream
+                assert received == wire_line.replace(b"D0EEC", b"0D0EEC", 1) + terminator
+
+            await wait_until(lambda: normalized() == 2.0)
+            assert count("ok") == 3.0  # padded lines are ordinary ok records
+            assert count("invalid_structure") == 0.0
+            writer.close()
+            conn.close()
         finally:
             adapter.request_stop()
             await asyncio.wait_for(run_task, 5.0)

@@ -57,7 +57,13 @@ Run entirely off-path; production units untouched.
      `readsb_messages_basestation_valid/invalid`, `readsb_position_count_*`),
      coordinates, `seen`/`seen_pos` age distributions;
    - every §12.5 mapped field still present with the same type — including
-     `alt_baro:"ground"` as a string and NO `alt_geom` for SBS aircraft.
+     `alt_baro:"ground"` as a string and NO `alt_geom` for SBS aircraft;
+   - **ICAO parity (ADR-0007):** `decodeSbsLine` still requires a 6–7 char ICAO
+     field and still reads exactly 6 hex digits after an optional `~`
+     (`grep -n 'icao must be 6 characters' vendor/readsb/net_io.c`), and
+     `json_out.c` still keys `hex` as `%06x`. The adapter's zero-padding exists
+     because of those two facts; if either changed, re-verify the padding rule
+     (and the post-padding 199-byte length re-check) before upgrading.
 6. Run the integration suite against the candidate binary, and manually inspect any
    statistically significant difference (spec §26.6): `.venv/bin/pytest -m integration`.
 7. Gate: **unexplained loss, stale-age regression, or implausible positions ⇒ no upgrade.**

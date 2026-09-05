@@ -65,9 +65,9 @@ the vendored tree); load-bearing for ADR-0004 honest age.
 
 | Quantity | Measured value | Measured by / date |
 |---|---|---|
-| `source_timestamp_quantization_ms` (SBS field-8 path, pinned build) | **1 ms** (injected 7 ms generated-ts offset served as [7] ms `seen_pos` deltas within single api snapshots) | `test/integration/test_e2e.py::test_quantization_measurement`, 2026-08-30 |
-| `seen_pos` output resolution observed | 1 ms (all sampled values integral in ms) | `test/integration/test_e2e.py::test_quantization_measurement`, 2026-08-30 |
-| `seen` output resolution observed | 100 ms (all sampled values integral in 0.1 s) | `test/integration/test_e2e.py::test_quantization_measurement`, 2026-08-30 |
+| `source_timestamp_quantization_ms` (SBS field-8 path, pinned build) | **1 ms** (injected 7 ms generated-ts offset served as [7] ms `seen_pos` deltas within single api snapshots) | `test/integration/test_e2e.py::test_quantization_measurement`, 2026-09-05 |
+| `seen_pos` output resolution observed | 1 ms (all sampled values integral in ms) | `test/integration/test_e2e.py::test_quantization_measurement`, 2026-09-05 |
+| `seen` output resolution observed | 100 ms (all sampled values integral in 0.1 s) | `test/integration/test_e2e.py::test_quantization_measurement`, 2026-09-05 |
 
 > NOTE for the integration agent: record the measured value here AND keep the
 > measuring test in `test/integration/` so the number regenerates on any
@@ -76,10 +76,22 @@ the vendored tree); load-bearing for ADR-0004 honest age.
 > real field-7/8 population, UTC-ness, and ms quantization against a live
 > capture when the entitled feed is available (code-readsb.md hazard note).
 
+## ICAO field handling (SBS input) — pinned facts
+
+- `decodeSbsLine` requires `6 <= strlen(field 5) <= 7` (net_io.c:3112) and then
+  reads **exactly 6 hex digits** after an optional `~` (net_io.c:3113-3125);
+  json/api writers re-key the aircraft as `%06x` (json_out.c:626/845).
+- ADSBHub sends addresses below 0x100000 unpadded (`D0EEC`), which that rule
+  rejects outright, so the adapter left-zero-pads the field before relay
+  (ADR-0007). Both facts are re-checked at every pin bump — see the ICAO
+  parity item in `runbooks/readsb-upgrade-rollback.md`.
+
 ## Golden fixtures
 
 - `test/fixtures/sbs/` — one golden line per MSG subtype 1–8 + malformed
-  corpus (ADR-0006 §4).
+  corpus (ADR-0006 §4) + `golden_icao_unpadded.txt`, a real 2026-09-05 ADSBHub
+  capture of the unpadded-ICAO form (ADR-0007); provenance in
+  `test/fixtures/sbs/README.md`.
 - `test/fixtures/api/` — recorded jv2 envelope from the pinned build
   (plan §0 req 4 verification surface).
 - Fixtures are pinned to actual d9a4c62 behavior including upstream quirks

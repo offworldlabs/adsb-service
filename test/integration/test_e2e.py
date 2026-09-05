@@ -577,20 +577,23 @@ def test_stale_guard(stack):
 
 def test_malformed_resilience(stack):
     corpus = (FIXTURES / "malformed_corpus.txt").read_bytes().splitlines()
-    assert len(corpus) == 20
+    assert len(corpus) == 22
     base_structure = stack.records_total("invalid_structure")
     base_range = stack.records_total("invalid_range")
     base_ok = stack.records_total("ok")
 
     stack.synth.inject(corpus)
 
-    # corpus under a live clock: 8 invalid_structure, 8 invalid_range (the
+    # corpus under a live clock: 9 invalid_structure, 8 invalid_range (the
     # track-360 line passes range checks since sc-1 — readsb accepts any
     # finite heading — and falls to the timestamp guard instead), the rest
-    # stale/future, 1 unparseable_ts (relayed by design — readsb stamps arrival)
+    # stale/future, 1 unparseable_ts (relayed by design — readsb stamps
+    # arrival). The 5-hex-ICAO line is no longer structural: it is padded
+    # (ADR-0007) and falls to the timestamp guard like its siblings, while the
+    # 7-hex and empty-ICAO lines added with it stay structural rejects.
     poll(
-        lambda: stack.records_total("invalid_structure") >= base_structure + 8,
-        20, "8 invalid_structure increments from the corpus",
+        lambda: stack.records_total("invalid_structure") >= base_structure + 9,
+        20, "9 invalid_structure increments from the corpus",
     )
     poll(
         lambda: stack.records_total("invalid_range") >= base_range + 8,

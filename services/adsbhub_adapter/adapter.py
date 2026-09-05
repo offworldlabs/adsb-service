@@ -20,7 +20,7 @@ from typing import Callable
 from . import __version__
 from .config import AdapterConfig, DiagnosticsConfig, redacted_config_hash
 from .metrics import UNHEALTHY_AFTER_SECONDS, AdapterMetrics, HealthState, MetricsServer
-from .sbs import INVALID_STRUCTURE, OK, validate_line
+from .sbs import ICAO_ZERO_PAD, INVALID_STRUCTURE, OK, validate_line
 
 log = logging.getLogger("adsbhub_adapter")
 
@@ -463,6 +463,10 @@ class Adapter:
                 altitude_max_ft=up.altitude_max_ft,
             )
             self.metrics.record(result.result)
+            if result.normalized:
+                # ADR-0007: the one rewrite the relay is allowed to make; the
+                # ratio to records_total is the provider-format-change signal
+                self.metrics.record_normalized(ICAO_ZERO_PAD)
             if result.result == OK:
                 self.health.last_valid_monotonic = self._mono()
                 self.metrics.set_last_record(self._clock())
@@ -474,6 +478,8 @@ class Adapter:
                     await self.relay.start()
             elif not result.relay:
                 self._sampler.sample(result.result, stripped)
-            if result.relay:
-                # forward verbatim: original bytes including original terminator
-                self.relay.broadcast(line)
+            if result.relay and result.relay_line is not None:
+                # forward verbatim — the validated bytes, with the ICAO field
+                # zero-padded when the provider omitted the leading zeros
+                # (ADR-0007, the only rewrite) — plus the original terminator
+                self.relay.broadcast(result.relay_line + line[len(stripped):])

@@ -95,9 +95,14 @@ readsb facts the design relies on (verified live by readers):
 
 Single asyncio process. Data path: upstream TCP client → line framing (max
 4096 B before allocation, spec §18.2/§12.1) → SBS validation → relay to at most
-readsb. **The adapter forwards only lines that passed validation, verbatim**
-(no rewriting — readsb's parser is the canonical consumer; we pre-filter, not
-transform).
+readsb. **The adapter forwards only lines that passed validation, verbatim,
+with exactly one enumerated exception: the ICAO field is left-zero-padded to
+6 hex chars (ADR-0007)** — otherwise no rewriting (readsb's parser is the
+canonical consumer; we pre-filter, not transform). ADSBHub emits addresses
+below 0x100000 without their leading zeros (`D0EEC` for 0D0EEC), which readsb
+rejects outright (net_io.c:3112), so the padding is what makes the whole
+000000–0FFFFF block visible at all; it is lossless and yields exactly the
+`%06x` aircraft key of §9.1.
 
 Upstream session:
 - One long-lived outbound TCP connection; host/port/all tunables from YAML config.
@@ -115,8 +120,11 @@ SBS validation (per §12.4 + §12.2, pre-filtering to readsb's accepted subset):
 - Structural: printable ASCII (reject NUL/control chars except CR/LF), field
   count ≥ 22, field 1 == `MSG`, MSG type ∈ {1..8} (the "explicitly tested
   variants" set — golden fixture per subtype in `test/fixtures/sbs/`), ICAO
-  6 hex chars (optional leading `~`), line length 20–199 (readsb's own cap —
-  validate BEFORE relay so we count, not readsb).
+  1–6 hex chars (optional leading `~`), left-padded to 6 before relay
+  (ADR-0007), line length 20–199 (readsb's own cap — validate BEFORE relay so
+  we count, not readsb; the cap is re-checked against the padded length, so a
+  199-byte line whose padding would push it to 200 is rejected here rather
+  than dropped silently by readsb).
 - Ranges (only when field non-empty; empty = absent, never zero-default):
   lat [−90,90], lon [−180,180], baro alt [−2000,100000] ft (configurable:
   `adsbhub.altitude_min_ft`/`altitude_max_ft`, §12.2), gs [0,1500] kt,
@@ -161,7 +169,9 @@ Config: YAML, strict (`config_version: 1` required, unknown keys fatal,
 metrics on 127.0.0.1:9101 with the §22.1 names, `provider="adsbhub"`:
 `retina_adsb_provider_connected`, `_bytes_total`, `_records_total{result=ok|invalid_structure|invalid_range|stale|future|unparseable_ts}`,
 `_last_record_timestamp_seconds`, `_reconnects_total{reason}`,
-`_record_delay_seconds` (histogram, buckets 0.1–60 s), plus
+`_record_delay_seconds` (histogram, buckets 0.1–60 s),
+`_records_normalized_total{normalization}` (the enumerated relay rewrites —
+only `icao_zero_pad`, ADR-0007; pre-initialized to 0 at startup), plus
 `retina_adsb_relay_connected_clients`, `retina_adsb_relay_dropped_lines_total`,
 and `retina_adsb_build_info{version,commit,schema_version,config_hash}`
 (§22.1 name; commit from `RETINA_ADSB_COMMIT` env, schema_version

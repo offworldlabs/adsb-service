@@ -1,6 +1,8 @@
 """Hypothesis property tests over the SBS validator (spec §21.3 release gate,
 DESIGN.md §7): arbitrary bytes never raise, non-MSG is never relayed, a
-relayed line re-validates as relayable, relayed numeric fields re-parse
+relayed line re-validates as relayable and unchanged (ADR-0007 fixed point),
+the relayed bytes differ from the input only by ICAO leading zeros
+(ADR-0007, the one enumerated rewrite), relayed numeric fields re-parse
 identically under a strtod-simulating parser (sec-5), generated timestamps
 match a reference reimplementation of readsb's exact parsing algorithm
 (strptime prefix + strtol literal-milliseconds fraction, ADR-0004 parity),
@@ -60,21 +62,59 @@ def test_arbitrary_bytes_never_raise(data: bytes):
 def test_never_relay_non_msg(data: bytes):
     res = validate_line(data, now=NOW)
     if res.relay:
-        stripped = data.rstrip(b"\r\n")
-        assert stripped.split(b",")[0] == b"MSG"
-        assert MIN_LINE_BYTES <= len(stripped) <= MAX_LINE_BYTES
-        assert len(stripped.split(b",")) >= 22
+        # the forwarded bytes, not the raw input, are what readsb must accept
+        relayed = res.relay_line
+        assert relayed is not None
+        assert relayed.split(b",")[0] == b"MSG"
+        assert MIN_LINE_BYTES <= len(relayed) <= MAX_LINE_BYTES
+        assert len(relayed.split(b",")) >= 22
 
 
 @given(st.binary(max_size=512))
 @_seed_examples
 def test_relayed_line_revalidates(data: bytes):
+    """The relayed bytes are a fixed point of the validator (ADR-0007): one
+    padding pass, then nothing changes — otherwise the relay could rewrite a
+    line the consumer would judge differently than the validator did."""
     res = validate_line(data, now=NOW)
     if res.relay:
-        again = validate_line(data, now=NOW)
-        assert again == res
+        assert res.relay_line is not None
+        again = validate_line(res.relay_line, now=NOW)
+        assert again.result == res.result
         assert again.relay is True
         assert again.result in (OK, UNPARSEABLE_TS)
+        assert again.relay_line == res.relay_line
+        assert again.normalized is False
+        assert again.generated_ts == res.generated_ts
+        assert again.delay == res.delay
+
+
+@given(st.binary(max_size=512))
+@_seed_examples
+def test_relay_line_only_inserts_icao_zeros(data: bytes):
+    """ADR-0007: the ONLY difference the relay may introduce is leading zeros
+    in field 4 — every other field byte-identical, the address value itself
+    unchanged, and the result still inside readsb's line-length window."""
+    res = validate_line(data, now=NOW)
+    if not res.relay:
+        assert res.relay_line is None
+        return
+    relayed = res.relay_line
+    assert relayed is not None
+    stripped = data.rstrip(b"\r\n")
+    assert MIN_LINE_BYTES <= len(relayed) <= MAX_LINE_BYTES
+    before, after = stripped.split(b","), relayed.split(b",")
+    assert len(before) == len(after)
+    for index, (was, now_field) in enumerate(zip(before, after)):
+        if index != 4:
+            assert was == now_field
+    body_before = before[4][1:] if before[4].startswith(b"~") else before[4]
+    body_after = after[4][1:] if after[4].startswith(b"~") else after[4]
+    assert after[4].startswith(b"~") is before[4].startswith(b"~")
+    assert len(body_after) == 6
+    assert int(body_after, 16) == int(body_before, 16)   # value preserved
+    assert body_after.endswith(body_before)              # only zeros prepended
+    assert res.normalized is (relayed != stripped)
 
 
 @settings(max_examples=300)

@@ -218,7 +218,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "retina_adsb_provider_records_total by result: ok | invalid_structure | invalid_range | stale | future | unparseable_ts (DESIGN.md §4). Non-ok ratio > 5% over 5m trips ParseErrorSurge.",
+      "description": "retina_adsb_provider_records_total by result: ok | invalid_structure | invalid_range | stale | future | unparseable_ts (DESIGN.md §4). Non-ok ratio > 5% over 5m trips ParseErrorSurge. The icao_zero_pad series is retina_adsb_provider_records_normalized_total: records whose ICAO field the adapter left-zero-padded before relay (ADR-0007) — they are also counted as ok; a sudden change in its ratio to the total is a provider-format-change signal.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -304,6 +304,17 @@
           "legendFormat": "{{result}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (normalization) (rate(retina_adsb_provider_records_normalized_total{provider=\"adsbhub\"}[1m]))",
+          "legendFormat": "{{normalization}}",
+          "range": true,
+          "refId": "B"
         }
       ],
       "title": "SBS records rate by validation result",
