@@ -17,15 +17,19 @@ data.adsbhub.org:5002  ──TCP out──►  adsbhub-adapter (Python, asyncio)
                                         ▼                                │  /run/readsb/stats.prom (metrics)
                                     serving-api (Python, FastAPI) 127.0.0.1:8080
                                         ▼
-                                    [Q5 boundary: nginx mTLS / private network — default CLOSED]
+                                    [Q5 boundary: nginx PUBLIC TLS front :443 behind the Cloudflare proxy (ADR-0005) — CLOSED until enabled]
+                                        ▲  origin admits 80/443 from Cloudflare ranges only; real client IP via CF-Connecting-IP
+                                    Cloudflare edge (adsb.retina.fm, orange cloud: TLS termination, DDoS absorption)
                                         ▼
                                     GET /v2/lat/{lat}/lon/{lon}/dist/{radius}   (adsb.lol v2 envelope)
 ```
 
 All listeners bind loopback except the (optional, operator-enabled) nginx front.
-Exactly zero public ports out of the box — AC-S-01 satisfied by default-closed;
-the Q5 decision (mTLS vs private network) is pending stakeholders and shipped as
-two documented nginx configs (see §8).
+Exactly zero public ports out of the box — AC-S-01 satisfied by default-closed.
+Q5 is decided (ADR-0005, 2026-09-05): a public, unauthenticated TLS front with
+adsb.lol parity (`deploy/nginx/public.conf`, enabled only by
+`deploy/enable-public-front.sh`; AC-S-01/AI-06 recorded as diverged). The two
+authenticated alternatives (mTLS, private network) remain shipped (see §8).
 
 ## 2. Ports and paths (fixed)
 
@@ -236,7 +240,8 @@ loader; AC-S-01 default-closed).
 services/adsbhub_adapter/   # S1 (spec cmd/adsbhub-adapter + internal/sbs)
 services/serving_api/       # interim serving tier (vendored-api derivative)
 deploy/systemd/*.service    # hardened units (separate users, see §8)
-deploy/nginx/               # Q5 boundary options (mtls.conf, private-net.conf)
+deploy/nginx/               # Q5 fronts: public.conf (chosen), mtls.conf, private-net.conf
+deploy/enable-public-front.sh  # enables public.conf: DNS check, LE cert, ufw, verify
 deploy/install.sh           # idempotent single-host install
 deploy/build-readsb.sh      # pinned build (ADR-0002)
 deploy/gen-readsb-args.py   # §18.3 config → verified readsb args
@@ -294,11 +299,17 @@ each: `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
 `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, `MemoryMax` (adapter 256M,
 readsb 1G, api 256M), `Restart=always` with rate limit. readsb unit:
 `RuntimeDirectory=readsb`. No unit binds a non-loopback address. nginx configs
-shipped but NOT enabled by install.sh: `mtls.conf` (server 443, client cert
-required, proxy to 8080 — recommended Q5 answer) and `private-net.conf`
-(bind private interface + allowlist). install.sh: creates users, installs venv +
-services + units, builds readsb via build-readsb.sh, runs `--check-config`,
-does NOT open firewall ports. A3's external port-scan check goes in the runbook.
+shipped but NOT enabled by install.sh: `public.conf` (the chosen Q5 front —
+TLS 443 + 80 ACME/redirect, no client auth, `/v2/` + `/health` only, nginx
+`limit_req` ahead of the in-app limiter, `/v2/` not access-logged; enabled by
+`enable-public-front.sh --proxied`, which also obtains the Let's Encrypt cert,
+generates the Cloudflare `realip` trust file, and turns on ufw with 22 open
+and 80/443 admitted from Cloudflare's ranges only), `mtls.conf` (client cert
+required) and
+`private-net.conf` (bind private interface + allowlist). install.sh: creates
+users, installs venv + services + units, builds readsb via build-readsb.sh,
+runs `--check-config`, does NOT open firewall ports. A3's external port-scan
+check goes in the runbook.
 
 ## 9. Observability (A3)
 
@@ -334,8 +345,9 @@ adapter-side cumulative counters. Node-cohort panels: N/A until Phase C
 
 - Interim REST surface replaces §11 gRPC contract (plan §0 decision) — spec
   amendment draft included; sunset when Phase B lands.
-- Q5 unresolved: shipped default-closed + two boundary options; AC-S-01 not
-  violated because nothing public exists until an operator enables a front.
+- Q5 resolved as the public front (ADR-0005): AC-S-01/AI-06 diverged by
+  decision; bounded by TLS-only, the enumerated `/v2/`+`/health` surface,
+  double rate limiting, no `/v2/` access log, ufw default-deny, A3 scan.
 - Q7 (ADSBHub latency vs 5 s node budget): measured continuously by
   `retina_adsb_provider_record_delay_seconds`; A3 characterization procedure in
   the freshness dashboard + runbook. Gates node cutover; cannot be answered

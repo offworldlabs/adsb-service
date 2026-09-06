@@ -146,11 +146,21 @@ client table. Nodes SHOULD poll at 1 Hz and MUST honor `Retry-After`.
 
 ## 7. Auth boundary
 
-**Placeholder — pending Q5** (ADR-0005, decision before first node cutover).
-Default-closed loopback until an operator enables one of the two shipped
-fronts (nginx mTLS — recommended — or private network + firewall).
-Unauthenticated public exposure is forbidden in every reading (AC-S-01).
-This amendment will be updated with the chosen boundary when Q5 resolves.
+**Decided 2026-09-05 (ADR-0005 Accepted, Q5 option 3): public TLS front,
+adsb.lol parity.** The interim surface is served to any client over HTTPS at
+`https://adsb.retina.fm` with **no client authentication**, exactly as
+`https://api.adsb.lol` is, so adsb.lol-native nodes cut over by changing the
+base URL only. This is a recorded divergence from AC-S-01 and from AI-06's
+mTLS qualifier, accepted by the project owner; the spec owner folds it into
+both documents in the integration change below. Bounds on the divergence:
+TLS only (port 80 = ACME + 301); only `/v2/…` and `/health` are reachable
+(`/metrics` loopback-only, everything else 404); two independent per-client
+rate limits (nginx 5 r/s burst 20 in front of the §6 in-app 2 r/s burst 10
+with 429 + `Retry-After`); `/v2/` never access-logged (the URI is the node's
+own position, §21.5); host firewall default-deny except 22/80/443, verified
+by the A3 external scan. The mTLS and private-network fronts remain shipped
+(`deploy/nginx/`) and are a front-only swap; per-node identity arrives with
+the Phase B contract (§21.1).
 
 ## 8. SUNSET
 
@@ -169,4 +179,5 @@ change to it requires a revision of this amendment (plan §4 lock-in risk).
       provision + AI-06 exposure note) in ONE change.
 - [ ] Lockstep version bump in both docs.
 - [ ] Fold in the ADR-0006 resolutions touching the same sections.
-- [ ] Resolve the Q5 placeholder (§7) once decided.
+- [x] Q5 resolved (§7, ADR-0005) — fold the AC-S-01/AI-06 divergence into
+      both documents in the same change.

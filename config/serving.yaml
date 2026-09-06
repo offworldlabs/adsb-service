@@ -65,7 +65,9 @@ rate_limit:
   # RIGHTMOST X-Forwarded-For entry — the hop appended by that proxy; all
   # entries left of it are client-supplied and ignored. Requests from any
   # unlisted peer ignore X-Forwarded-For entirely (spoofable) and key on
-  # the peer address. Default: empty (no proxy trusted). With the nginx
-  # front on this same host, add the loopback address it connects from:
-  #trusted_proxies:
-  #  - 127.0.0.1
+  # the peer address. Shipped with the loopback address the same-host nginx
+  # public front (deploy/nginx/public.conf, Q5 option 3 — ADR-0005) connects
+  # from, so each node gets its own bucket instead of all collapsing into
+  # 127.0.0.1's. Remove the entry if no front runs on this host.
+  trusted_proxies:
+    - 127.0.0.1

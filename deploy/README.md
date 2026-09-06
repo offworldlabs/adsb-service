@@ -9,7 +9,10 @@ Deployment artifacts for the Phase A data plane (DESIGN.md §8, ADR-0002/0003):
 | `gen-readsb-args.py` | `config/readsb.yaml` → verified readsb argument vector (spec §18.3) |
 | `verify-units.sh` | grep-asserts the mandated hardening keys in the unit files |
 | `systemd/*.service` | hardened units: `adsbhub-adapter`, `readsb-hub`, `retina-serving-api` |
-| `nginx/mtls.conf`, `nginx/private-net.conf` | the two Q5 boundary options — **neither enabled by default** |
+| `nginx/public.conf` | the **chosen** Q5 boundary (ADR-0005): public TLS front, adsb.lol parity — enabled only by `enable-public-front.sh`, never by `install.sh` |
+| `enable-public-front.sh` | idempotent: authoritative DNS + routing probe, Let's Encrypt certificate, installs `public.conf`, `--proxied` Cloudflare real-IP trust + ufw 80/443 from Cloudflare ranges only, verifies the front |
+| `nginx/cloudflare-ips.txt` | vendored Cloudflare IP ranges — offline fallback for `--proxied`; the script refreshes from cloudflare.com on every run |
+| `nginx/mtls.conf`, `nginx/private-net.conf` | the two alternative (authenticated) boundaries — shipped, not enabled |
 
 ## Prerequisites (plan.md A0 — do these first)
 
@@ -91,25 +94,51 @@ and paste the emitted `ExecStart=` line into the unit. The generator refuses
 (breaks the `alt_baro:"ground"` v2 envelope). `install.sh` re-verifies the
 unit line on every run.
 
-## Q5 boundary options (external exposure — default CLOSED)
+## Q5 boundary — public TLS front (external exposure; CLOSED until enabled)
 
-The serving-api binds loopback only. To let RETINA nodes/operators reach
-`GET /v2/...` from off-host, an operator must enable exactly one of the two
-documented nginx fronts (spec AC-S-01 forbids unauthenticated public
-exposure; the choice between them is open question Q5, pending
-stakeholders):
+The serving-api binds loopback only and `install.sh` opens nothing. Q5 was
+decided 2026-09-05 (ADR-0005): the interim `GET /v2/...` surface is served
+**publicly over HTTPS with no client authentication, exactly like
+api.adsb.lol**, so nodes cut over by changing their base URL. Enable it with:
 
-- **`nginx/mtls.conf` (recommended):** TLS on 443 with mandatory client
-  certificates from the RETINA CA; per-client identity, works over any
-  network. Requires the CA/enrollment story (ADR #4).
+```sh
+sudo deploy/enable-public-front.sh adsb.retina.fm --proxied --email ops@example.com
+```
+
+Prerequisite: an **A record `adsb.retina.fm → this host's public IP` on
+the Cloudflare zone that the domain's nameservers actually publish**,
+**proxied (orange cloud)** — Cloudflare fronts the origin for DDoS
+absorption (ADR-0005). The script asks the authoritative nameservers
+directly (the local resolver may cache "no such name" for 30 min), checks
+the record points at Cloudflare, and proves routing by fetching a one-time
+probe through the public name. It then installs nginx + certbot, refreshes
+Cloudflare's IP ranges (fallback `nginx/cloudflare-ips.txt`) into a
+`realip` trust file so every limiter sees the real node address from
+`CF-Connecting-IP`, obtains and auto-renews the Let's Encrypt certificate,
+installs `nginx/public.conf` (only `/v2/` and `/health` proxied; `/metrics`
+loopback-only; everything else 404; nginx per-client `limit_req` in front
+of the in-app 2 req/s burst 10 limiter, keyed on the real client because
+`127.0.0.1` is in `rate_limit.trusted_proxies`), enables ufw with 22 open
+and **80/443 admitted only from Cloudflare's ranges**, and verifies the
+front end to end (including a `cf-ray` header). Re-run it after any change
+to `public.conf` and periodically to refresh the Cloudflare ranges. Without
+`--proxied` the same script supports a DNS-only record pointing straight at
+the host. Nodes then use
+`https://adsb.retina.fm/v2/lat/{lat}/lon/{lon}/dist/{nmi}`.
+
+Cloudflare dashboard settings for the hostname (not automatable from here):
+SSL/TLS **Full (strict)**; Bot Fight Mode / managed challenges **off** for
+`adsb.retina.fm` (nodes are non-browser clients); a Cache Rule bypassing
+cache for `adsb.retina.fm/*`; optionally an edge Rate Limiting rule on
+`/v2/*` (~5 requests per 10 s per IP) so floods die at the edge.
+
+The two authenticated alternatives stay shipped and are a front-only swap:
+
+- **`nginx/mtls.conf`:** TLS on 443 with mandatory client certificates from
+  the RETINA CA; per-client identity. Requires the CA/enrollment story
+  (ADR #4) — the Phase B direction.
 - **`nginx/private-net.conf`:** bind a private interface (VPC/VPN/WireGuard)
-  plus an `allow/deny` CIDR allowlist; no client identity — acceptable only
-  where private-network membership is itself controlled.
-
-Both files are fully commented and inert until copied into the local nginx
-config and the operator opens the corresponding firewall port. Rate
-limiting is enforced in-app either way (2 req/s, burst 10 per client,
-sized for ~1 Hz node polling).
+  plus an `allow/deny` CIDR allowlist; no client identity.
 
 ## Operator visualization (optional)
 
