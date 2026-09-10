@@ -1,9 +1,21 @@
 # RETINA ADS-B v1 — Normative Core
 
 **Companion to:** `RETINA_ADSB_IMPLEMENTATION_SPEC.md` (“the full specification”)
-**Document version:** 1.3 (the two documents version in lockstep)
-**Status:** Binding requirement set for v1 implementation and acceptance
-**Date:** 2026-08-26
+**Document version:** 1.4 (the two documents version in lockstep)
+**Status:** Guidance — see the status note below
+**Date:** 2026-09-06
+
+> **Status note (1.4, 2026-09-06, project owner):** this document and the
+> full specification are to be taken as a **loose suggestion**, not a binding
+> contract. Where an accepted ADR in `docs/adr/`, `docs/DESIGN.md` or the
+> conformance ledger diverges from a requirement here, the ADR governs and
+> the divergence is recorded there rather than treated as a defect. The
+> requirement language (MUST/SHOULD) is kept as written for reference; the
+> divergences currently in force are indexed in
+> `docs/conformance-ledger.md` ("Known divergences"). Concretely for the
+> contribution path: TCP 7444 is open as an **account-less Beast ingest**
+> (plain or TLS, no client certificate) per ADR-0008, not the mutual-TLS
+> gateway described in AI-06/AI-07/§4 below.
 
 This document is the review and acceptance surface for the RETINA ADS-B data plane: it contains the binding requirements an implementer or reviewer works against daily. The full specification carries the architecture, rationale, data flows, configuration examples, and operational guidance behind them. On conflict, this document governs, and the conflict is a defect to fix in both documents in one change. `§n` references point into the full specification; where such a reference supplies parameters or procedures (Section 15 lists them), those are incorporated by reference and equally binding.
 
@@ -20,7 +32,7 @@ This document is the review and acceptance surface for the RETINA ADS-B data pla
 | AI-03 | Local and central candidates are kept separate per aircraft and field group. The central feed MUST NOT enter the decoder instance that supplies the local candidate (§7.4). |
 | AI-04 | Node contribution carries only local receiver data; central or redistributed data MUST NEVER be re-fed to the server. The ADSBHub contribution entitlement MUST be satisfied by a designated receiver feeding ADSBHub directly — never with hub-aggregate or central-derived data — and MUST be documented (§4.1, §7.4). |
 | AI-05 | Default node integration is the isolated sidecar (Mode A): `--net-only`, read-only Beast client of the existing decoder, never opens the SDR, and leaves existing `readsb`/tar1090 service, config, and data paths unchanged (§6.2, §7.1). Optional Mode B changes to the existing decoder MUST preserve all existing command-line arguments and service overrides and validate port availability first (§7.2). |
-| AI-06 | Public exposure is exactly TCP 443 (distribution gRPC, mTLS) and TCP 7444 (contribution feed, mTLS). No raw `readsb`, metrics, admin, or node-local port is Internet-exposed (§19). |
+| AI-06 | Public exposure is exactly TCP 443 (distribution gRPC, mTLS) and TCP 7444 (contribution feed, mTLS). No raw `readsb`, metrics, admin, or node-local port is Internet-exposed (§19). *Phase A actual (ADR-0005/ADR-0008): 443 = unauthenticated HTTPS REST behind Cloudflare; 7444 = unauthenticated Beast ingest, plain or TLS; second sentence holds.* |
 | AI-07 | The feed gateway maps each client certificate to exactly one `node_id` and expected receiver UUID, rejects mismatches, and MUST NOT act as a general TCP tunnel (§6.1). |
 | AI-08 | Every queue, cache, history buffer, and reconnect loop is explicitly bounded. Retries use exponential backoff with jitter, capped at 30 s (node distribution) and 60 s (ADSBHub); 60 s of stable connection resets backoff (§24). |
 | AI-09 | No provider-specific value, field name, or failure mode crosses the canonical contract (§3.3). |
@@ -94,6 +106,8 @@ with `unknown_network_penalty_ms` (default 250 ms) when no valid RTT exists. Gro
 The contract is the Protocol Buffer definition in full-specification §11, incorporated here verbatim and binding, until `proto/retina/adsb/v1/adsb.proto` exists in the repository; thereafter the repository file is authoritative and both documents reference it. Package `retina.adsb.v1`; services `DistributionService` (`Stream`, `Probe`) and `LocalAircraftService` (`GetSnapshot`, `Watch`, `GetAtTime`, `GetRegionAtTime`).
 
 Schema evolution (§11.1): field numbers MUST NOT change or be reused; deletions are `reserved`; new enum values append; receivers tolerate unknown enum values and ignore unknown fields; the server supports current and previous minor versions during rolling upgrades; CI runs Protobuf lint, breaking-change detection, generated-code freshness, and cross-version serialization tests.
+
+*Phase A actual (ADR-0008, 2026-09-06): TCP 7444 accepts plain Beast or TLS 1.2/1.3 with a server certificate only — no client certificate, no ALPN, no UUID marker, any Beast variant; attribution is by source address; see `docs/spec-amendment-interim-serving.md` §7a. The paragraph below describes the Phase B target.*
 
 Contribution transport (§11.2): TCP 7444, mutual TLS (TLS 1.3 preferred; 1.2 minimum only where approved), ALPN `retina-adsb-feed/1` where supported; payload is an unmodified continuous BeastReducePlus stream, no custom framing/compression/multiplexing; one connection = one authenticated node/receiver pair; a valid receiver UUID marker is required within the first 64 KiB and 5 seconds and is then enforced for the session; certificate/UUID mismatch or undecodable prefix closes the connection without forwarding. The node forwarder buffers at most 1 MiB or 2 seconds (whichever is smaller) and MUST discard expired backlog rather than replay it as live. The pinned server `readsb` build MUST enable the upstream receiver-UUID feature, CI MUST verify BeastReducePlus UUID preservation with a real encoded fixture, and upstream build flags MUST be revalidated on upgrade (§4).
 

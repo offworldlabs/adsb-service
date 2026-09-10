@@ -42,10 +42,20 @@ EXPECTED_ARGS = [
     "--max-range=99999",
     "--write-json=/run/readsb",
     "--write-json-every=1",
-    "--json-reliable=1",
+    "--json-reliable=2",
     "--net-api-port=30152",
     "--api-shutdown-delay=2",
+    # ADR-0008: Beast contribution listener + --net-ingest, always as a pair,
+    # with the ingest rate limits raised above the aggregate SBS rate
+    "--net-bi-port=31004",
+    "--net-ingest",
+    "--devel=ingestLimitRate,60000",
+    "--devel=ingestLimitPositionRate,20000",
     "--write-prom=/run/readsb/stats.prom",
+]
+FEED_PAIR = [
+    "--net-bi-port=31004", "--net-ingest",
+    "--devel=ingestLimitRate,60000", "--devel=ingestLimitPositionRate,20000",
 ]
 
 BINARY = "/usr/local/bin/readsb-retina"
@@ -184,12 +194,113 @@ class TestFieldInjectionRefused:
 
 def test_debug_port_overlay_restores_sbs_in_port(tmp_path: Path) -> None:
     # A test/debug overlay that sets sbs_debug_port gets the §3 listener
-    # back, placed before --write-prom as DESIGN.md §3 shows it.
+    # back, placed before the feed pair as DESIGN.md §3 shows it.
     overlay = tmp_path / "readsb.yaml"
     overlay.write_text(
         CONFIG.read_text(encoding="utf-8") + "\nsbs_debug_port: 32006\n",
         encoding="utf-8",
     )
     args = run_generator(config=overlay).splitlines()
-    expected = EXPECTED_ARGS[:-1] + ["--net-sbs-in-port=32006", EXPECTED_ARGS[-1]]
+    n = len(FEED_PAIR) + 1
+    expected = EXPECTED_ARGS[:-n] + ["--net-sbs-in-port=32006"] + EXPECTED_ARGS[-n:]
     assert args == expected
+
+
+class TestIngestLimits:
+    """--net-ingest's per-client limits also bind the ADSBHub SBS relay; the
+    generator raises them above the aggregate rate whenever the pair is
+    emitted (readsb's 300 positions/s default blanked every served position
+    live on 2026-09-06)."""
+
+    def test_defaults_follow_the_pair(self) -> None:
+        args = run_generator().splitlines()
+        i = args.index("--net-ingest")
+        assert args[i + 1 : i + 3] == ["--devel=ingestLimitRate,60000", "--devel=ingestLimitPositionRate,20000"]
+
+    def test_tunable(self, tmp_path: Path) -> None:
+        args = run_generator(config=overlay_config(
+            tmp_path, ingest_limit_messages_per_second=80000, ingest_limit_positions_per_second=5000,
+        )).splitlines()
+        assert "--devel=ingestLimitRate,80000" in args
+        assert "--devel=ingestLimitPositionRate,5000" in args
+
+    def test_refused_without_feed_port(self, tmp_path: Path) -> None:
+        err = run_generator_expect_refusal(overlay_config(
+            tmp_path, beast_feed_port=None, ingest_limit_positions_per_second=5000,
+        ))
+        assert "ingest_limit_positions_per_second" in err
+
+    @pytest.mark.parametrize("value", [0, -5, "6000", 1.5, True])
+    def test_bad_values_refused(self, tmp_path: Path, value: object) -> None:
+        err = run_generator_expect_refusal(overlay_config(tmp_path, ingest_limit_messages_per_second=value))
+        assert "ingest_limit_messages_per_second" in err
+
+    def test_hand_set_devel_refused(self, tmp_path: Path) -> None:
+        # a second --devel could silently reset the limits (or enable any
+        # other devel mode) on the hub
+        err = run_generator_expect_refusal(overlay_config(tmp_path, extra_args=["--devel=ingestLimitRate,10"]))
+        assert "--devel" in err
+
+
+class TestBeastFeedPort:
+    """ADR-0008: `beast_feed_port` emits --net-bi-port AND --net-ingest as an
+    inseparable pair; neither may be set by hand, and dropping the key
+    yields the serve-only (pre-ADR-0008) vector."""
+
+    def test_shipped_config_emits_the_pair(self) -> None:
+        args = run_generator().splitlines()
+        i = args.index("--net-bi-port=31004")
+        assert args[i + 1] == "--net-ingest"
+        assert args.count("--net-ingest") == 1
+
+    def test_serve_only_when_key_absent(self, tmp_path: Path) -> None:
+        cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+        del cfg["beast_feed_port"]
+        path = tmp_path / "readsb.yaml"
+        path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+        args = run_generator(config=path).splitlines()
+        assert args == [a for a in EXPECTED_ARGS if a not in FEED_PAIR]
+        assert not any(a.startswith("--net-bi-port") or a == "--net-ingest" for a in args)
+
+    def test_null_key_means_absent(self, tmp_path: Path) -> None:
+        args = run_generator(config=overlay_config(tmp_path, beast_feed_port=None)).splitlines()
+        assert args == [a for a in EXPECTED_ARGS if a not in FEED_PAIR]
+
+    @pytest.mark.parametrize("value", ["31004", "31004 --lat=1", 0, 65536, True, -1])
+    def test_bad_port_refused(self, tmp_path: Path, value: object) -> None:
+        err = run_generator_expect_refusal(overlay_config(tmp_path, beast_feed_port=value))
+        assert "beast_feed_port" in err
+
+    @pytest.mark.parametrize("other", ["api_port", "relay__port"])
+    def test_listener_port_collision_refused(self, tmp_path: Path, other: str) -> None:
+        # readsb cannot bind two listeners to one port; refuse at generation.
+        err = run_generator_expect_refusal(overlay_config(tmp_path, **{other: 31004}))
+        assert "31004" in err
+
+    @pytest.mark.parametrize("flag", [
+        "--net-bi-port=30004",   # a second, unpaired listener
+        "--net-ingest",          # duplicate / unpaired
+        "--json-reliable=1",     # would silently undo the feeder guard
+    ])
+    def test_hand_set_pair_flags_refused_in_extra_args(self, tmp_path: Path, flag: str) -> None:
+        err = run_generator_expect_refusal(overlay_config(tmp_path, extra_args=[flag]))
+        assert flag.split("=", 1)[0] in err
+
+
+class TestJsonReliable:
+    @pytest.mark.parametrize("value,expected", [(1, "--json-reliable=1"), (4, "--json-reliable=4")])
+    def test_value_passes_through(self, tmp_path: Path, value: int, expected: str) -> None:
+        args = run_generator(config=overlay_config(tmp_path, json_reliable=value)).splitlines()
+        assert expected in args and "--json-reliable=2" not in args
+
+    def test_absent_key_falls_back_to_one(self, tmp_path: Path) -> None:
+        cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+        del cfg["json_reliable"]
+        path = tmp_path / "readsb.yaml"
+        path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+        assert "--json-reliable=1" in run_generator(config=path).splitlines()
+
+    @pytest.mark.parametrize("value", [0, 5, -1, "2", 2.5, True])
+    def test_out_of_range_refused(self, tmp_path: Path, value: object) -> None:
+        err = run_generator_expect_refusal(overlay_config(tmp_path, json_reliable=value))
+        assert "json_reliable" in err

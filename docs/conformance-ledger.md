@@ -21,10 +21,10 @@
 | `AI-01` — solver gets ADS-B only via node-local agent API | deferred-phase-C | — | Node-side. Interaction recorded: post-cutover nodes consume the interim REST endpoint via tar1090-node proxy, legitimized by the spec amendment (ADR-0004). No node consumes during Phase A (cutover gated on Q7/soak), so Phase A itself does not violate. |
 | `AI-02` — local path has no cloud dependency | deferred-phase-C | — | Entirely node-side; no server-side Phase A obligation. |
 | `AI-03` — local/central candidates kept separate | deferred-phase-C | — | Node fusion, Phase C. Server corollary covered by AI-04. |
-| `AI-04` — contribution never central-derived; designated station documented | partial | docs/licenses.md (station record); plan A0 | Station 47.46.206.146 documented (feeds ADSBHub from its own decoder); nothing in Phase A forwards hub/central data to ADSBHub (no contribution path exists server-side). Remaining: A0 live confirmation the station is actively feeding — pending-operational. |
+| `AI-04` — contribution never central-derived; designated station documented | partial | docs/licenses.md (station record); plan A0; ADR-0008 | Station 47.46.206.146 documented (feeds ADSBHub from its own decoder); nothing on the hub forwards hub/central data to ADSBHub. Since ADR-0008 anonymous feeders contribute on 7444: "local receiver data only" is a stated feeder obligation the hub **cannot verify** without identity (recorded, not enforced). Remaining: A0 live confirmation the station is actively feeding — pending-operational. |
 | `AI-05` — sidecar Mode A default | deferred-phase-C | — | Node-side (Mode A only per plan §3). |
-| `AI-06` — public exposure exactly 443/7444 | diverged | ADR-0005 (Accepted, Q5 option 3); DESIGN §1; deploy/nginx/public.conf | Second sentence satisfied: all readsb/metrics/admin ports loopback-only; through the front `/metrics` is 403 and every non-v2 path 404 (asserted by deploy/enable-public-front.sh on every run). First sentence diverged: Phase A exposes 443 (+80 ACME/redirect) as an **unauthenticated** public TLS REST front (adsb.lol parity) at adsb.retina.fm, not 443-gRPC-mTLS/7444; recorded in the spec amendment §7. |
-| `AI-07` — feed gateway cert↔node mapping | deferred-phase-B | — | retina-feed-gateway not built (no node contributions before Phase B/C). |
+| `AI-06` — public exposure exactly 443/7444 | diverged | ADR-0005 (Accepted, Q5 option 3); DESIGN §1; deploy/nginx/public.conf | Second sentence satisfied: all readsb/metrics/admin ports loopback-only; through the front `/metrics` is 403 and every non-v2 path 404 (asserted by deploy/enable-public-front.sh on every run). First sentence diverged: Phase A exposes 443 (+80 ACME/redirect) as an **unauthenticated** public TLS REST front (adsb.lol parity) at adsb.retina.fm, not 443-gRPC-mTLS; and since ADR-0008 **7444 as an unauthenticated Beast contribution port** (plain or TLS, no client certificate, no account — adsb.lol ingest model) rather than the mTLS feed; recorded in the spec amendment §7/§7a. 7444 is reached at the origin, outside the Cloudflare shield. |
+| `AI-07` — feed gateway cert↔node mapping | diverged | ADR-0008; deploy/nginx/feed.conf; deploy/enable-feed-port.sh | No gateway and no certificates: contributions are accepted from any source on 7444, attributed by source address only (PROXY v1 → readsb `--net-ingest`); no `node_id`/UUID mapping exists to enforce. The front is not a general TCP tunnel (fixed upstream 127.0.0.1:31004 only). Cert↔node mapping returns with the Phase B gateway; the mTLS switch itself is front-only. |
 | `AI-08` — everything bounded; backoff+jitter, 60 s cap ADSBHub, 60 s reset | satisfied | services/adsbhub_adapter (backoff, relay queue 8 MiB/20k lines), services/serving_api (rate limiter, bounded LRU); test/unit backoff+bounds tests | Initial delay 1 s (configurable) per ADR-0006 §1 — recorded resolution of §18.2 vs §24. |
 | `AI-09` — no provider specifics cross the canonical contract | diverged | ADR-0004 | No canonical contract exists in Phase A; the interim surface deliberately serves readsb/adsb.lol-shaped fields as a documented temporary contract with a sunset (amendment §8). Surface kept minimal to limit lock-in (plan §4). |
 | `AI-10` — reuse readsb decode/CPR/dedup | satisfied | readsb-hub (pinned, ADR-0002); adapter validates/relays only; serving reads readsb state | No decode/CPR/dedup reimplementation anywhere in services/. |
@@ -55,9 +55,9 @@
 | `perf-objectives` — §25.2 | partial | design: bounded queues + explicit drops (adapter relay drop-on-overflow counted; serving 429s) | Distribution SLOs attach to Phase B gRPC tier. Binding-now zero-lost-updates/explicit-overload principle implemented. Provider-to-server latency reported (delay histogram), not an SLO — but measured for Q7. §31 ADR #12 (SLO reference model) not yet written — open item, see `adrs` row. |
 | `capacity-tests` — §25.3/§26.6 | partial | runbooks/readsb-upgrade-rollback.md (≥30-min replay gate); adapter close-relay + 60 s stale guard (no-backlog-replay, integration-tested) | 2×/5× capacity tests are Gate 2, deferred. Replay-comparison gate for readsb/parser changes binds now and is runbooked. |
 | `AC-gates-mapping` — Phase A ≈ spec Phase 1 | diverged | this ledger; DESIGN §10 | **Phase 1 component delta recorded:** spec Phase 1 also runs feed-gateway + state server in shadow; Phase A runs only adapter + readsb-hub + interim serving. Phase 1 exit criteria (72 h soak, no unbounded growth, parse errors understood, freshness dashboards, independent-view comparison) are Phase A's acceptance bar; no core Gate closes in Phase A. |
-| `AC-F-11` — no feedback loop incl. §4.1 path | partial | docs/licenses.md (station record) | §4.1 half binds now: station feeds from its own decoder (A0 verify — pending-operational); server never forwards central data to ADSBHub (no such path exists). Node-contribution half deferred. |
+| `AC-F-11` — no feedback loop incl. §4.1 path | partial | docs/licenses.md (station record); ADR-0008 | §4.1 half binds now: station feeds from its own decoder (A0 verify — pending-operational); server never forwards central data to ADSBHub (no such path exists). Node-contribution half: feeders on 7444 are told to send only their own receiver's data; a feeder re-feeding central data cannot be detected without identity (ADR-0008 — diverged by policy, spec §33 note 6 says a node's own report returning in the aggregate is harmless). |
 | `AC-R-05a` — 72 h server soak | pending-operational | runbooks/ soak checklist; A3 | Operational, not a build artifact (DESIGN §10). Pass: no unbounded memory/queue/disk/descriptor growth. 48 h node soak deferred. |
-| `AC-S-01` — public scan clean | diverged | ADR-0005 (Accepted); deploy/nginx/public.conf; deploy/enable-public-front.sh; A3 external-scan check | Default-closed as installed. With the Q5 option 3 front enabled the scan from an arbitrary address shows only 22 (80/443 are admitted from Cloudflare's ranges alone; the public endpoint is Cloudflare's edge, proxied); the 443 endpoint is TLS but **unauthenticated** (the recorded divergence); no raw readsb/metrics/admin/node-local port is reachable (front enumerates `/v2/` + `/health` only; ufw default-deny). Actual external scan is A3 pending-operational and re-runs after network changes. |
+| `AC-S-01` — public scan clean | diverged | ADR-0005 (Accepted); deploy/nginx/public.conf; deploy/enable-public-front.sh; A3 external-scan check | Default-closed as installed. With the Q5 option 3 front enabled the scan from an arbitrary address shows 22 and, since ADR-0008, **7444** (80/443 are admitted from Cloudflare's ranges alone; the public endpoint is Cloudflare's edge, proxied); the 443 endpoint is TLS but **unauthenticated** and 7444 is an **unauthenticated** Beast ingest (plain or TLS) — both recorded divergences; no raw readsb/metrics/admin/node-local port is reachable (7444 is nginx, forwarding only to the loopback Beast listener; front enumerates `/v2/` + `/health` only; ufw default-deny). Actual external scan is A3 pending-operational and re-runs after network changes. |
 | `AC-S-04` — fuzz: no crash/hang/unbounded/secret | satisfied | test/unit hypothesis fuzz over SBS validator (default pytest = release gate); corpus seeded from fixtures; ADR-0001 (fuzz-gate-regardless mitigation) | Properties: arbitrary bytes never raise; never relay non-MSG; relayed ⇒ re-validates. Continuous corpus retention per §26.8. |
 | `AC-S-05` — SBOM, least privilege, no node keys | satisfied | ADR-0003 (systemd translation); deploy/systemd hardening inventory; docs/licenses.md (SBOM) | Adapted per spec §20.1's "hardened system services" allowance: separate users, ProtectSystem=strict, MemoryMax, loopback-only. No node private keys exist server-side. |
 | `AC-O-01a` — dashboards 1–3 | partial | dashboards/pipeline.json, freshness.json (items 1–2) | Item 3 (node source selection) deferred-phase-C. **Node-cohort panels N/A until Phase C** — recorded scope note (DESIGN §10) so Gate 1 evidence reads correctly. |
@@ -114,8 +114,21 @@
    exception to verbatim relay (rows `aircraft-key`,
    `units-no-silent-conversion`, `range-checks`, `sbs-parsing`), without
    which the whole 000000–0FFFFF address block is invisible.
+7. **Account-less Beast contribution port on 7444** — ADR-0008 (owner
+   decision 2026-09-06; spec declared guidance, version 1.4 status note):
+   rows `AI-06`, `AI-07`, `AC-S-01`, `AI-04`, `AC-F-11`; amendment §7a. No
+   mTLS, no cert↔node mapping, no UUID marker; TLS optional; bounded per
+   source address; `--json-reliable=2`; 7444 outside the Cloudflare shield.
 
 ## New surfaces the spec does not name (registered here per DESIGN)
+
+- **Feed front internals (ADR-0008):** readsb `--net-ingest` writes
+  `/run/readsb/clients.json` every 10 s (feeder source address, receiver id
+  hashed from it, rates) and logs `disc:` lines with the address to the
+  journal — operational data under the §21.5 policy (not written yet; feeder
+  addresses are the first personal-data-like field the hub retains). nginx
+  keeps no feed access log. Loopback `127.0.0.1:7445` is the TLS terminator
+  behind 7444 (never reachable directly).
 
 - Adapter metrics/health HTTP on `127.0.0.1:9101` (`/metrics`, `/healthz`) —
   interim surface, loopback-only.
@@ -150,4 +163,15 @@
 - Q7 latency measurement + 72 h soak + external scan + A0 station
   confirmation — pending-operational set.
 - Spec amendment is DRAFT — divergences are recorded but not yet legitimized
-  in the binding docs.
+  in the binding docs (the docs now carry a 1.4 status note that they are
+  guidance, per the owner; the amendment integration remains the clean way
+  to fold the divergences in).
+- Feeder identity (ADR-0008): none. Abuse of 7444 is bounded per source
+  address only; AI-04's node half is unenforceable until the Phase B
+  gateway. 7444 is unshielded from volumetric attack (Cloudflare carries
+  HTTP only); Spectrum or a separate ingest host if that materializes.
+- Feed TLS hostname: the front presents the `adsb.retina.fm` certificate,
+  a name that resolves to Cloudflare, so TLS feeders must connect to the
+  origin IP with SNI/verification set to that name. A DNS-only `feed.<zone>`
+  record + `enable-feed-port.sh --tls-host feed.<zone>` fixes that (opens
+  80/tcp to anyone for HTTP-01).

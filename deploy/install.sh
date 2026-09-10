@@ -60,10 +60,13 @@ if [ "$SKIP_PORT_CHECK" -eq 0 ]; then
     check_port 31003 adsbhub-adapter.service   "adapter SBS relay"
     check_port 9101  adsbhub-adapter.service   "adapter metrics/health"
     check_port 30152 readsb-hub.service        "readsb re-api"
+    check_port 31004 readsb-hub.service        "readsb Beast contribution listener (loopback, ADR-0008)"
     # 32006 (readsb debug SBS inject) not checked: sbs_debug_port ships
     # commented out (validation-bypass port, test/debug overlays only).
+    # 7444 (public feed front) belongs to nginx and is opened only by
+    # deploy/enable-feed-port.sh, never here.
     check_port 8080  retina-serving-api.service "serving-api"
-    log "port-collision check passed (31003 9101 30152 8080)"
+    log "port-collision check passed (31003 9101 30152 31004 8080)"
 else
     log "port-collision check SKIPPED by request"
 fi
@@ -180,8 +183,8 @@ Verify:
   curl -s http://127.0.0.1:8080/health            # serving-api
   curl -s 'http://127.0.0.1:8080/v2/lat/37.6/lon/-122.4/dist/50'
 
-External exposure stays CLOSED until you enable one Q5 boundary option by
-hand (deploy/nginx/mtls.conf recommended, or private-net.conf) and open its
-port in your firewall yourself — see deploy/README.md.
+External exposure stays CLOSED until you enable it by hand (deploy/README.md):
+  deploy/enable-public-front.sh <host> --proxied   # nodes: GET /v2 over HTTPS (ADR-0005)
+  deploy/enable-feed-port.sh [--tls-host <host>]   # feeders: Beast in on TCP 7444, no account (ADR-0008)
 ============================================================================
 EOF

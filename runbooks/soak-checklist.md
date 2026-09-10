@@ -84,18 +84,24 @@ ss -tlnp
 ```
 Expected: `127.0.0.1:9101` (adapter), `127.0.0.1:8080` (api), `127.0.0.1:9102`
 (file exporter), `127.0.0.1:30152` (re-api),
-`127.0.0.1:31003` (relay — present only while upstream healthy), plus sshd and
+`127.0.0.1:31003` (relay — present only while upstream healthy),
+`127.0.0.1:31004` (readsb Beast contribution listener, ADR-0008) and
+`127.0.0.1:7445` (nginx TLS terminator behind 7444), plus sshd and
 Prometheus if local. `127.0.0.1:32006` (readsb debug SBS inject) must NOT be
 listening — `sbs_debug_port` ships disabled; seeing it means a test/debug
-overlay leaked into production config. Anything bound `0.0.0.0`/`[::]` other
-than sshd = fail.
+overlay leaked into production config. Bound `0.0.0.0`/`[::]`: only sshd,
+nginx 80/443 (Q5 front, ADR-0005) and nginx 7444 (feed front, ADR-0008) —
+anything else = fail.
 
-From ANOTHER host:
+From ANOTHER host (not a Cloudflare address):
 ```
 nmap -Pn -p- <droplet-public-ip>
 ```
-Expected open: ssh (and nothing else — the nginx front stays disabled until Q5 is
-resolved). Any RETINA port visible = fail, fix firewall/binds before sign-off.
+Expected open: ssh and **7444** (the account-less Beast feed, ADR-0008);
+80/443 must show filtered (admitted from Cloudflare's ranges only). Any
+other RETINA port visible = fail, fix firewall/binds before sign-off. Also
+confirm `ufw status` still lists `7444/tcp ALLOW Anywhere` after any re-run
+of `enable-public-front.sh` (it resets ufw and must re-add the feed rule).
 
 ## 6. Alert hygiene during the soak
 

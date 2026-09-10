@@ -22,10 +22,18 @@ data.adsbhub.org:5002  ──TCP out──►  adsbhub-adapter (Python, asyncio)
                                     Cloudflare edge (adsb.retina.fm, orange cloud: TLS termination, DDoS absorption)
                                         ▼
                                     GET /v2/lat/{lat}/lon/{lon}/dist/{radius}   (adsb.lol v2 envelope)
+
+receiver nodes / anyone  ──TCP 7444──►  nginx stream front (ADR-0008: plain Beast OR TLS, no client cert,
+                                          no account; ssl_preread picks the form; PROXY v1 header added)
+                                            ▼  127.0.0.1:31004 (readsb --net-bi-port, --net-ingest)
+                                        readsb-hub (same instance as above — the aggregate)
 ```
 
-All listeners bind loopback except the (optional, operator-enabled) nginx front.
-Exactly zero public ports out of the box — AC-S-01 satisfied by default-closed.
+All listeners bind loopback except the two operator-enabled nginx fronts
+(443 serving, 7444 contribution). Exactly zero public ports out of the box —
+AC-S-01 satisfied by default-closed; each front is a recorded divergence once
+enabled (ADR-0005, ADR-0008). Cloudflare fronts only the HTTP side: feeders
+reach the origin address directly, so 7444 is outside the DDoS shield.
 Q5 is decided (ADR-0005, 2026-09-05): a public, unauthenticated TLS front with
 adsb.lol parity (`deploy/nginx/public.conf`, enabled only by
 `deploy/enable-public-front.sh`; AC-S-01/AI-06 recorded as diverged). The two
@@ -42,6 +50,8 @@ authenticated alternatives (mTLS, private network) remain shipped (see §8).
 | readsb JSON dir | `/run/readsb` (systemd `RuntimeDirectory=readsb`) | readsb default; tar1090 reads it |
 | serving-api | `127.0.0.1:8080` (`/v2/...`, `/health` readiness, `/livez`, `/metrics`) | new |
 | readsb debug SBS inject | `127.0.0.1:32006` (`--net-sbs-in-port`) — **disabled by default** (bypasses the adapter's validation and stale guard; test overlays only) | adsb.lol pattern |
+| readsb Beast contribution listener | `127.0.0.1:31004` (`--net-bi-port`, with `--net-ingest`; key `beast_feed_port`) | spec §19 port; ADR-0008 |
+| Public feed port | `0.0.0.0:7444` nginx stream front → 31004, plain Beast or TLS (no client cert), PROXY v1 to readsb; **closed until `enable-feed-port.sh`** | spec §19 port number; adsb.lol ingest model (ADR-0008) |
 
 ## 3. readsb-hub (reused, not reimplemented — AI-10)
 
@@ -60,8 +70,10 @@ readsb --net --quiet
   --net-connector=127.0.0.1,31003,sbs_in
   --net-connector-delay=5
   --max-range=99999
-  --write-json=/run/readsb --write-json-every=1 --json-reliable=1
+  --write-json=/run/readsb --write-json-every=1 --json-reliable=2
   --net-api-port=30152 --api-shutdown-delay=2
+  --net-bi-port=31004 --net-ingest
+  --devel=ingestLimitRate,60000 --devel=ingestLimitPositionRate,20000
   --write-prom=/run/readsb/stats.prom
 ```
 
@@ -71,12 +83,35 @@ adapter's §12.4 validation and the ADR-0004 stale guard.)
 
 MUST NOT set: `--lat/--lon` (would arm the 450 nmi range filter and drop far SBS
 positions), `--json-separate-alt-ground`/`--json-separate-ground` (would break the
-`alt_baro:"ground"` v2 envelope), a second `--net-api-port` (single port only).
+`alt_baro:"ground"` v2 envelope), a second `--net-api-port` (single port only),
+`--net-bi-port` or `--net-ingest` on their own (ADR-0008: the pair is generated
+from `beast_feed_port`; a Beast listener without `--net-ingest` lets a feeder
+set the hub's receiver location and skips readsb's per-feeder limits and PROXY
+parsing), any hand-written `--devel`.
 `--db-file` deferred (r/t fields not consumed by the node proxy) — config option later.
-`--json-reliable=1` is readsb's default: SBS positions arrive `+2` reliable, so
-they are immediately JSON-visible either way; keep the default, record in ledger
-(adsb.lol uses 2 for multi-feeder garbage rejection — not applicable to one
-validated upstream).
+
+`--json-reliable=2` since ADR-0008 (adsb.lol's multi-feeder value; key
+`json_reliable`): a position is served only after two consistent position
+messages, so one bogus CPR pair from an anonymous feeder plants nothing.
+Correction of the earlier claim here that SBS positions are "immediately
+visible either way": they are not — a newly seen ADSBHub aircraft's first
+position is held ~1–2 s until its second (live 2026-09-06: 7,065 aircraft,
+6,794 with served positions, the gap being fresh arrivals); already-tracked
+aircraft are unaffected. Also corrected: 1 is readsb's default only with a
+receiver location set; without `--lat/--lon` readsb itself defaults to 2
+(readsb.c:2659).
+
+`--net-ingest` (ADR-0008) makes readsb parse the PROXY v1 header the 7444
+front prepends (real feeder address → receiver id, `clients.json`, `disc:`
+journal lines), enforce per-client message/position rate limits and garbage
+disconnects, detect CPR fast-repetition garbage, and ignore radarcape
+position frames. Its rate limits bind **every** input client, the ADSBHub
+SBS relay included: readsb's defaults (5,420 msg/s, 300 positions/s) flagged
+the ~2,500 msg/s / ~800 positions/s aggregate as garbage within seconds and
+every ADSBHub position stopped being served (observed live 2026-09-06), so the
+generator raises them to 60,000 / 20,000 (keys `ingest_limit_*_per_second`) —
+unreachable by the aggregate and by one feeder alike (nginx caps a feed
+connection at 1 MB/s ≈ 45k Beast messages/s).
 
 readsb facts the design relies on (verified live by readers):
 - SBS lines: only `MSG`, length 20–199, ≥22 comma fields, 6-hex ICAO (optional `~`);
@@ -306,10 +341,20 @@ TLS 443 + 80 ACME/redirect, no client auth, `/v2/` + `/health` only, nginx
 generates the Cloudflare `realip` trust file, and turns on ufw with 22 open
 and 80/443 admitted from Cloudflare's ranges only), `mtls.conf` (client cert
 required) and
-`private-net.conf` (bind private interface + allowlist). install.sh: creates
-users, installs venv + services + units, builds readsb via build-readsb.sh,
-runs `--check-config`, does NOT open firewall ports. A3's external port-scan
-check goes in the runbook.
+`private-net.conf` (bind private interface + allowlist), and `feed.conf`
+(ADR-0008: nginx `stream{}` front on TCP 7444 → `127.0.0.1:31004` — plain
+Beast or TLS with no client certificate, auto-detected by `ssl_preread`;
+PROXY v1 header so readsb keys on the real feeder; `limit_conn` 4 per
+address, 1 MB/s per connection, 90 s idle, 65 s preread; no access log;
+enabled by `enable-feed-port.sh [--tls-host <name>]`, which installs
+`libnginx-mod-stream`, verifies readsb carries the `--net-bi-port`/
+`--net-ingest` pair and listens, obtains a certificate for a DNS-only feed
+hostname when asked, opens `ufw 7444/tcp`, and proves the path end to end —
+readsb must log the host's own address from the PROXY header;
+`enable-public-front.sh` re-applies the 7444 rule after its ufw reset).
+install.sh: creates users, installs venv + services + units, builds readsb
+via build-readsb.sh, runs `--check-config`, does NOT open firewall ports.
+A3's external port-scan check goes in the runbook.
 
 ## 9. Observability (A3)
 
@@ -354,4 +399,10 @@ adapter-side cumulative counters. Node-cohort panels: N/A until Phase C
   without live entitled feed.
 - §28 Phase 1 exit includes feed-gateway/receivers — out of Phase A scope,
   coverage comparison must use an independent view (ledger row).
+- Contribution port opened as adsb.lol-style account-less Beast ingest on
+  TCP 7444 (ADR-0008, owner decision 2026-09-06, spec declared guidance):
+  AI-06/AI-07/§11.2 diverged (no mTLS, no cert↔node mapping, no UUID
+  marker), AI-04/AC-F-11 node half by feeder policy only; bounded per source
+  address (nginx + readsb `--net-ingest`) and by `--json-reliable=2`; 7444
+  is outside the Cloudflare shield. Path to §11.2 mTLS is front-only.
 - 72 h soak is operational, not a build artifact: soak checklist in runbooks.

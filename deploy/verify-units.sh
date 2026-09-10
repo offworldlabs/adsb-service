@@ -75,6 +75,17 @@ assert_absent "readsb-hub.service" '\-\-json-separate' 'breaks alt_baro:"ground"
 # sbs_debug_port ships disabled: the injection listener bypasses adapter
 # validation + the stale guard (test/debug overlays only, sec review)
 assert_absent "readsb-hub.service" '\-\-net-sbs-in-port' "validation-bypass debug port must stay disabled by default"
+# ADR-0008: the Beast contribution listener and --net-ingest travel as a pair
+# (without --net-ingest a feeder could set the hub's receiver location and
+# readsb would skip its per-feeder rate/garbage limits + PROXY parsing).
+if grep -qE -- '--net-bi-port=' "$UNIT_DIR/readsb-hub.service"; then
+    if grep -qE -- '--net-bi-port=[0-9]+ --net-ingest( |$)' "$UNIT_DIR/readsb-hub.service"; then
+        echo "ok   readsb-hub.service: --net-bi-port is paired with --net-ingest"
+    else
+        echo "FAIL readsb-hub.service: --net-bi-port present without --net-ingest (ADR-0008)" >&2
+        FAIL=1
+    fi
+fi
 
 assert "retina-serving-api.service" "User=retina-api"
 assert "retina-serving-api.service" "MemoryMax=256M"

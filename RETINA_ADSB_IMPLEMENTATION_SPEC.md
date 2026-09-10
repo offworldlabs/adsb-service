@@ -1,12 +1,21 @@
 # RETINA ADS-B Fusion and Serving System
 
 **Implementation specification**  
-**Document version:** 1.3  
-**Status:** Proposed implementation baseline  
-**Date:** 2026-08-26  
+**Document version:** 1.4  
+**Status:** Guidance (see status note)  
+**Date:** 2026-09-06  
+
+> **Status note (1.4, 2026-09-06, project owner):** this specification and
+> its normative core are a **loose suggestion**, not a binding contract.
+> Accepted ADRs in `docs/adr/`, `docs/DESIGN.md` and the conformance ledger
+> govern where they diverge; divergences are indexed in
+> `docs/conformance-ledger.md`. In particular the contribution transport of
+> §11.2/§19 is, in Phase A, an account-less Beast ingest on TCP 7444 (plain
+> or TLS, no client certificate) per ADR-0008.
+
 **Audience:** RETINA backend, node-platform, solver, infrastructure, security, QA, and operations teams
 
-**Revision history:** 1.0 initial draft. 1.1 (2026-08-26): provider trust defaults and ADSBHub contribution rules (§4.1, §10.5, §12.4, §13.1); precision-association eligibility and quality-flag registry (§14.2); bandwidth budget, default region radius, and update decimation (§15.1, §15.8, §25.2); timestamp-quantization and jump-check fixes (§10.4, §12.3, §13.6, §16.4); cross-source history and queue/replay-ring fixes (§15.6, §16.3, §17); `GetRegionAtTime` (§11, §16.4); selection-boundary hysteresis (§13.4); gated acceptance criteria (§29); Mender/secure-element alignment (§20.5, §21.1). 1.2 (2026-08-26): binding requirements extracted to the companion `RETINA_ADSB_NORMATIVE_CORE.md`, which governs on conflict; this document now carries architecture, rationale, and operational guidance. 1.3 (2026-08-26): consistency fixes — `SELECTION_REASON_OTHER_SOURCE_EXPIRED` emission rule and hysteresis-branch reachability note (§13.4); `category` assigned to the `IDENTITY` group (§9.3); absent-`Region` request semantics (§16.2, §16.4); v1 handling of `Subscribe` resume fields (§15.5); distribution listen-port clarification (§18.2).
+**Revision history:** 1.0 initial draft. 1.1 (2026-08-26): provider trust defaults and ADSBHub contribution rules (§4.1, §10.5, §12.4, §13.1); precision-association eligibility and quality-flag registry (§14.2); bandwidth budget, default region radius, and update decimation (§15.1, §15.8, §25.2); timestamp-quantization and jump-check fixes (§10.4, §12.3, §13.6, §16.4); cross-source history and queue/replay-ring fixes (§15.6, §16.3, §17); `GetRegionAtTime` (§11, §16.4); selection-boundary hysteresis (§13.4); gated acceptance criteria (§29); Mender/secure-element alignment (§20.5, §21.1). 1.2 (2026-08-26): binding requirements extracted to the companion `RETINA_ADSB_NORMATIVE_CORE.md`, which governs on conflict; this document now carries architecture, rationale, and operational guidance. 1.3 (2026-08-26): consistency fixes — `SELECTION_REASON_OTHER_SOURCE_EXPIRED` emission rule and hysteresis-branch reachability note (§13.4); `category` assigned to the `IDENTITY` group (§9.3); absent-`Region` request semantics (§16.2, §16.4); v1 handling of `Subscribe` resume fields (§15.5); distribution listen-port clarification (§18.2). 1.4 (2026-09-06): status downgraded to guidance by the project owner (status note); Phase A actuals annotated for the contribution transport (§11.2, §19, core AI-06/§4) per ADR-0008; no requirement text removed.
 
 ---
 
@@ -799,6 +808,13 @@ These rules follow the official [Protocol Buffers compatibility guidance](https:
 
 ### 11.2 Node contribution transport
 
+> *Phase A actual (ADR-0008, 2026-09-06): TCP 7444 is an account-less Beast
+> ingest — plain TCP Beast or TLS with a server certificate only, no client
+> certificate, no ALPN, no UUID marker, any Beast variant (beast_out,
+> beast_reduce_out, beast_reduce_plus_out); attribution by source address
+> (PROXY v1 → `readsb --net-ingest`); bounds per address in nginx + readsb;
+> `--json-reliable=2`. The list below is the Phase B target.*
+
 - Public endpoint: TCP 7444, TLS 1.3 preferred (TLS 1.2 minimum only where approved), mutual certificate authentication.
 - ALPN/application identifier: `retina-adsb-feed/1` when supported by the selected TLS stack.
 - Payload after TLS establishment: an unmodified continuous BeastReducePlus byte stream; no custom line framing, application compression, or multiplexing.
@@ -1402,7 +1418,7 @@ All selected ports MUST be probed before installation. The exact connector synta
 | Scope | Port/path | Protocol | Exposure | Purpose |
 |---|---|---|---|---|
 | Server | 443 | gRPC/HTTP2/TLS | Nodes/approved clients | Distribution API |
-| Server | 7444 | BeastReducePlus over mTLS | Authorized nodes | Contributed feed gateway |
+| Server | 7444 | BeastReducePlus over mTLS *(Phase A actual: any Beast variant, plain or TLS, no client cert — ADR-0008)* | Authorized nodes *(Phase A: anyone)* | Contributed feed gateway *(Phase A: nginx stream front → 31004)* |
 | Server | 31003 | SBS/TCP | Loopback/private only | Adapter relay; `readsb` connects with `sbs_in` |
 | Server | 31004 | Beast/TCP | Loopback/private only | Gateway → `readsb` |
 | Server | 31005 | JSON lines/TCP | Loopback/private only | `readsb` → state server |

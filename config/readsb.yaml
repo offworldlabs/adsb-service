@@ -53,6 +53,38 @@ connector_delay: 5
 # shutdown; new ones get 503.
 api_shutdown_delay: 2
 
+# Node contribution (ADR-0008): loopback Beast input listener (--net-bi-port,
+# bound via bind_address). The PUBLIC TCP 7444 front — deploy/nginx/feed.conf,
+# enabled only by deploy/enable-feed-port.sh — proxies feeders to it with a
+# PROXY protocol v1 header, so readsb sees each feeder's real address. Setting
+# this key ALSO emits --net-ingest (the generator refuses either flag on its
+# own): PROXY-header parsing, per-feeder message/position rate limits and
+# garbage disconnects, and a feeder's radarcape position frame can no longer
+# set this hub's receiver location. Comment out to run serve-only.
+beast_feed_port: 31004
+
+# --net-ingest rate limits (--devel=ingestLimitRate / ingestLimitPositionRate),
+# per input client per second. readsb's defaults (5420 messages, 300
+# positions) are sized for ONE physical receiver and apply to the ADSBHub SBS
+# relay connector too: at the aggregate's ~2,500 msg/s and ~800 positions/s
+# they flag it as garbage and every ADSBHub position vanishes from the served
+# picture (observed live 2026-09-06). The generator therefore emits these
+# bounds, which the aggregate never reaches and a single feeder cannot exceed
+# either (nginx caps a feed connection at 1 MB/s ≈ 45k Beast messages/s).
+# Only valid together with beast_feed_port. Uncomment to tune.
+# ingest_limit_messages_per_second: 60000
+# ingest_limit_positions_per_second: 20000
+
+# --json-reliable: consistent position messages an aircraft needs before its
+# position is served. 2 = adsb.lol's multi-feeder value — one bogus CPR pair
+# from an anonymous feeder is not enough to plant an aircraft. Cost for
+# ADSBHub-derived aircraft: a NEWLY seen aircraft's first position is held
+# until its second consistent one (~1-2 s at SBS rates); everything already
+# tracked is unaffected (live 2026-09-06: 7,065 aircraft, 6,794 with served
+# positions, the gap being fresh arrivals). 1 = readsb's value for a single
+# trusted input (the pre-ADR-0008 vector).
+json_reliable: 2
+
 # Optional loopback SBS injection listener (--net-sbs-in-port) for tests
 # and debugging only (DESIGN.md §2). DISABLED BY DEFAULT — WARNING: anything
 # written to this port reaches readsb without passing the adapter's §12.4

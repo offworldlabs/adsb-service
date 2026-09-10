@@ -71,6 +71,14 @@ adsbhub-adapter          retina-feed-gateway
 └─────────────────────────────────────────────┘
 ```
 
+Phase A as deployed differs from the target above in two decided places
+(the spec documents are guidance since 1.4, see their status notes):
+nodes read an adsb.lol-compatible **HTTPS REST** surface at
+`https://adsb.retina.fm/v2/...` instead of gRPC + mTLS (ADR-0005), and the
+**7444 contribution port is an account-less Beast ingest** — plain or TLS,
+no client certificate, adsb.lol-style — straight into `readsb-hub`
+(ADR-0008); there is no `retina-feed-gateway` yet.
+
 Key invariants (see the core, Section 1, for the full set):
 
 - **The solver talks only to the node-local `retina-adsb-agent` API.** Never to ADSBHub, readsb, tar1090 files, or receiver ports directly (AI-01).

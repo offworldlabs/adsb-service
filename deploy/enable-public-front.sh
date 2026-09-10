@@ -194,6 +194,16 @@ if command -v ufw >/dev/null; then
         ufw allow 443/tcp >/dev/null
         log "ufw enabled: deny incoming except 22/80/443"
     fi
+    # Beast contribution port (ADR-0008, deploy/enable-feed-port.sh): the
+    # reset above wiped its rules; put them back when the front is installed.
+    if [ -f /etc/nginx/retina-stream.d/retina-adsb-feed.conf ]; then
+        ufw allow 7444/tcp >/dev/null
+        log "ufw: 7444/tcp kept open (Beast contribution port)"
+        if [ "$PROXIED" -eq 1 ] && grep -qs '^FEED_HTTP01_ANY=1' /etc/retina-adsb/feed-port.env; then
+            ufw allow 80/tcp >/dev/null
+            log "ufw: 80/tcp open from anywhere (HTTP-01 renewals for the feed TLS host)"
+        fi
+    fi
     ufw --force enable >/dev/null
 else
     log "WARNING: ufw not installed — verify the firewall by hand (spec AC-S-01)"

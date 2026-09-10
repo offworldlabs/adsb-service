@@ -162,6 +162,27 @@ by the A3 external scan. The mTLS and private-network fronts remain shipped
 (`deploy/nginx/`) and are a front-only swap; per-node identity arrives with
 the Phase B contract (§21.1).
 
+## 7a. Contribution port (added 2026-09-06, ADR-0008)
+
+**Decided by the project owner: an account-less Beast contribution port on
+TCP 7444, adsb.lol-ingest parity, with the spec's mutual-TLS gateway (§11.2,
+AI-06, AI-07) explicitly set aside.** Any receiver may connect with a plain
+Beast connector (`--net-connector <host>,7444,beast_out`, or the
+beast_reduce/beast_reduce_plus variants) or over TLS presenting no client
+certificate (server certificate only; stunnel/socat in front of the same
+connector). There is no identity, no receiver-UUID requirement and no ALPN.
+The hub attributes each connection to its source address (PROXY protocol v1
+from the nginx stream front into `readsb --net-ingest`), bounds it there
+(4 connections per address, 1 MB/s per connection, 90 s idle, readsb's
+per-feeder message/position limits and garbage disconnect) and serves a
+contributed aircraft only after two consistent positions
+(`--json-reliable=2`). AI-04's "local receiver data only" becomes a stated
+feeder obligation the hub cannot verify; the hub itself still re-feeds
+nothing upstream. Cloudflare does not front this port: feeders reach the
+origin address directly, so 7444 is outside the DDoS shield (80/443 remain
+Cloudflare-only). Moving to §11.2 mTLS later is a front-only change on the
+same port (`ssl_verify_client on` + RETINA CA, plain branch removed).
+
 ## 8. SUNSET
 
 This contract is **temporary**. It is retired when Phase B lands the native
@@ -181,3 +202,6 @@ change to it requires a revision of this amendment (plan §4 lock-in risk).
 - [ ] Fold in the ADR-0006 resolutions touching the same sections.
 - [x] Q5 resolved (§7, ADR-0005) — fold the AC-S-01/AI-06 divergence into
       both documents in the same change.
+- [x] Contribution port decided (§7a, ADR-0008) — AI-06/AI-07/§11.2/§19
+      divergences annotated in both documents (1.4) as "Phase A actual";
+      fold properly in the integration change.

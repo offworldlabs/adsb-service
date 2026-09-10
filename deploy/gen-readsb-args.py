@@ -51,6 +51,28 @@ FORBIDDEN_FLAGS = {
     "--max-range": "set max_range instead of duplicating the flag",
     "--write-json": "set write_json_dir instead of duplicating the flag",
     "--net-connector": "set relay.host/relay.port instead of duplicating the flag",
+    "--json-reliable": "set json_reliable instead of duplicating the flag",
+    # ADR-0008: the Beast contribution listener and --net-ingest are emitted
+    # as a PAIR from beast_feed_port. A Beast listener without --net-ingest
+    # would let any feeder set this hub's receiver location (radarcape
+    # position frame → arms the range filter) and would skip readsb's
+    # per-feeder rate/garbage limits and PROXY-header parsing.
+    "--net-bi-port": "set beast_feed_port instead (emits --net-bi-port AND --net-ingest together, ADR-0008)",
+    "--net-ingest": "emitted together with --net-bi-port from beast_feed_port; never set it separately (ADR-0008)",
+    "--devel": "set ingest_limit_messages_per_second / ingest_limit_positions_per_second instead; other devel modes are unsupported on the hub",
+}
+
+# --net-ingest applies its per-client message/position rate limits to EVERY
+# input client, the ADSBHub SBS relay connector included. readsb's defaults
+# (5420 msg/s, 300 positions/s — sized for one physical receiver) flag the
+# aggregate SBS stream as garbage within seconds and every ADSBHub position
+# stops being served (observed live 2026-09-06: 0 positions after restart).
+# They are therefore raised to bounds an aggregate never reaches while a
+# single feeder still cannot exceed them (nginx's 1 MB/s per connection cap
+# is ~45k Beast messages/s).
+INGEST_LIMIT_DEFAULTS = {
+    "ingest_limit_messages_per_second": 60000,
+    "ingest_limit_positions_per_second": 20000,
 }
 
 TOP_KEYS_REQUIRED = {
@@ -64,7 +86,10 @@ TOP_KEYS_REQUIRED = {
     "connector_delay",
     "api_shutdown_delay",
 }
-TOP_KEYS_OPTIONAL = {"sbs_debug_port", "extra_args"}
+TOP_KEYS_OPTIONAL = {
+    "sbs_debug_port", "extra_args", "beast_feed_port", "json_reliable",
+    *INGEST_LIMIT_DEFAULTS,
+}
 RELAY_KEYS = {"host", "port"}
 
 
@@ -148,6 +173,33 @@ def validate(cfg: dict[str, Any], path: Path) -> dict[str, Any]:
     require_port(cfg, "api_port", cfg["api_port"])
     if "sbs_debug_port" in cfg and cfg["sbs_debug_port"] is not None:
         require_port(cfg, "sbs_debug_port", cfg["sbs_debug_port"])
+    if cfg.get("beast_feed_port") is not None:
+        require_port(cfg, "beast_feed_port", cfg["beast_feed_port"])
+    # Every listener readsb opens must be a distinct port or it fails to bind.
+    listeners = {
+        key: cfg[key]
+        for key in ("api_port", "sbs_debug_port", "beast_feed_port")
+        if cfg.get(key) is not None
+    }
+    listeners["relay.port"] = relay["port"]
+    seen: dict[int, str] = {}
+    for key, port in listeners.items():
+        if port in seen:
+            fail(f"{path}: {key} and {seen[port]} both use port {port}")
+        seen[port] = key
+    for key in INGEST_LIMIT_DEFAULTS:
+        if key in cfg and cfg[key] is not None:
+            if cfg.get("beast_feed_port") is None:
+                fail(f"{path}: {key} only applies with beast_feed_port set (it tunes --net-ingest)")
+            v = cfg[key]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+                fail(f"{path}: {key} must be a positive integer, got {v!r}")
+    if cfg.get("json_reliable") is not None:
+        jr = cfg["json_reliable"]
+        # readsb clamps to -1..4 (readsb.c:1893-1897); below 1 would serve
+        # single-message positions from anonymous feeders (ADR-0008).
+        if not isinstance(jr, int) or isinstance(jr, bool) or not 1 <= jr <= 4:
+            fail(f"{path}: json_reliable must be an integer 1-4, got {jr!r}")
 
     for key in ("connector_delay", "api_shutdown_delay", "max_range", "write_json_every"):
         require_positive_number(f"{path}: {key}", cfg[key])
@@ -191,13 +243,23 @@ def build_args(cfg: dict[str, Any]) -> list[str]:
         f"--max-range={fmt(cfg['max_range'])}",
         f"--write-json={json_dir}",
         f"--write-json-every={fmt(cfg['write_json_every'])}",
-        # readsb default, pinned explicitly; ledger note in DESIGN.md §3
-        "--json-reliable=1",
+        # pinned explicitly (1 when unset — the pre-ADR-0008 vector);
+        # shipped config sets 2, see DESIGN.md §3
+        f"--json-reliable={fmt(cfg.get('json_reliable') or 1)}",
         f"--net-api-port={fmt(cfg['api_port'])}",
         f"--api-shutdown-delay={fmt(cfg['api_shutdown_delay'])}",
     ]
     if cfg.get("sbs_debug_port") is not None:
         args.append(f"--net-sbs-in-port={fmt(cfg['sbs_debug_port'])}")
+    if cfg.get("beast_feed_port") is not None:
+        # ADR-0008: always as a pair (see FORBIDDEN_FLAGS).
+        args.append(f"--net-bi-port={fmt(cfg['beast_feed_port'])}")
+        args.append("--net-ingest")
+        # readsb splits --devel on commas: <name>,<value> (readsb.c OptDevel)
+        msgs = cfg.get("ingest_limit_messages_per_second") or INGEST_LIMIT_DEFAULTS["ingest_limit_messages_per_second"]
+        pos = cfg.get("ingest_limit_positions_per_second") or INGEST_LIMIT_DEFAULTS["ingest_limit_positions_per_second"]
+        args.append(f"--devel=ingestLimitRate,{fmt(msgs)}")
+        args.append(f"--devel=ingestLimitPositionRate,{fmt(pos)}")
     args.append(f"--write-prom={json_dir}/stats.prom")
     args.extend(cfg.get("extra_args") or [])
     scan_tokens(args)
@@ -211,7 +273,8 @@ GENERATED_FLAGS = frozenset({
     "--net", "--quiet", "--net-bind-address", "--net-connector",
     "--net-connector-delay", "--max-range", "--write-json",
     "--write-json-every", "--json-reliable", "--net-api-port",
-    "--api-shutdown-delay", "--net-sbs-in-port", "--write-prom",
+    "--api-shutdown-delay", "--net-sbs-in-port", "--net-bi-port",
+    "--net-ingest", "--devel", "--write-prom",
 })
 
 

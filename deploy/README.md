@@ -13,6 +13,8 @@ Deployment artifacts for the Phase A data plane (DESIGN.md §8, ADR-0002/0003):
 | `enable-public-front.sh` | idempotent: authoritative DNS + routing probe, Let's Encrypt certificate, installs `public.conf`, `--proxied` Cloudflare real-IP trust + ufw 80/443 from Cloudflare ranges only, verifies the front |
 | `nginx/cloudflare-ips.txt` | vendored Cloudflare IP ranges — offline fallback for `--proxied`; the script refreshes from cloudflare.com on every run |
 | `nginx/mtls.conf`, `nginx/private-net.conf` | the two alternative (authenticated) boundaries — shipped, not enabled |
+| `nginx/feed.conf` | **contribution port** (ADR-0008): nginx `stream{}` front on TCP 7444 → readsb's loopback Beast listener; plain Beast or TLS (no client cert) auto-detected; PROXY v1 so readsb sees the real feeder — enabled only by `enable-feed-port.sh` |
+| `enable-feed-port.sh` | idempotent: installs the stream module, checks readsb carries `--net-bi-port`/`--net-ingest`, optional certificate for a DNS-only feed hostname, installs `feed.conf`, `ufw allow 7444/tcp`, verifies plain + TLS end to end (readsb must log the real address); `--disable` closes it again |
 
 ## Prerequisites (plan.md A0 — do these first)
 
@@ -40,7 +42,7 @@ sudo deploy/install.sh              # add --install-deps to fetch build packages
 
 What it does (rerunnable; nothing is started, no firewall is touched):
 
-1. Port-collision precondition (spec §19) for 31003/9101/30152/8080.
+1. Port-collision precondition (spec §19) for 31003/9101/30152/31004/8080.
 2. Creates system users `retina-adapter`, `readsb`, `retina-api`.
 3. Syncs code to `/opt/retina-adsb` (root-owned), builds the venv at
    `/opt/retina-adsb/.venv`, pip-installs the project into it.
@@ -74,6 +76,8 @@ sudo systemctl enable --now adsbhub-adapter readsb-hub retina-serving-api
 | readsb JSON dir | `/run/readsb` (`RuntimeDirectory=readsb`) | readsb default; tar1090 reads it |
 | serving-api | `127.0.0.1:8080` (`/v2/...`, `/health`, `/metrics`) | new |
 | readsb debug SBS inject | `127.0.0.1:32006` — **disabled by default** (`sbs_debug_port` commented out in `config/readsb.yaml`; bypasses adapter validation) | test/debug overlays only |
+| readsb Beast contribution listener | `127.0.0.1:31004` (`--net-bi-port` + `--net-ingest`, key `beast_feed_port`) | spec §19 port; ADR-0008 |
+| Public feed port | `0.0.0.0:7444` nginx stream → 31004 — **closed until `enable-feed-port.sh`** | ADR-0008 |
 
 Exactly **zero public ports** exist after install (AC-S-01 by
 default-closed). `install.sh` never opens firewall ports; the external
@@ -139,6 +143,58 @@ The two authenticated alternatives stay shipped and are a front-only swap:
   (ADR #4) — the Phase B direction.
 - **`nginx/private-net.conf`:** bind a private interface (VPC/VPN/WireGuard)
   plus an `allow/deny` CIDR allowlist; no client identity.
+
+## Contribution port — account-less Beast ingest on TCP 7444 (ADR-0008)
+
+Decided 2026-09-06: receivers feed the hub the way they feed adsb.lol — a
+Beast connector, no account, no client certificate — at the spec's port
+number. TLS is offered on the same port for feeders that want privacy in
+transit (server certificate only). Enable it with:
+
+```sh
+sudo deploy/enable-feed-port.sh --tls-host adsb.retina.fm      # as deployed (reuses that certificate)
+sudo deploy/enable-feed-port.sh                                # plain Beast only
+sudo deploy/enable-feed-port.sh --tls-host feed.retina.fm --email ops@example.com   # own DNS-only feed name
+sudo deploy/enable-feed-port.sh --disable
+```
+
+What it does: installs `libnginx-mod-stream` and a `stream { include
+/etc/nginx/retina-stream.d/*.conf; }` block; refuses unless
+`/etc/retina-adsb/readsb.yaml` sets `beast_feed_port` and the installed unit
+carries the generated `--net-bi-port=31004 --net-ingest` pair (with the
+raised `--devel=ingestLimit*` bounds) and readsb is listening; obtains a
+certificate for `--tls-host` if none exists (the name must be **DNS-only**
+and point straight here — Cloudflare's proxy does not carry raw TCP — and
+Let's Encrypt validates from many addresses, so the script then opens
+`80/tcp` from anywhere and keeps it open for renewals); renders
+`nginx/feed.conf` (plain + TLS auto-detected by `ssl_preread`; PROXY v1 to
+readsb; `limit_conn` 4 per address, 1 MB/s per connection, 90 s idle, 65 s
+preread); `ufw allow 7444/tcp`; then proves the path by connecting through
+the public address (plain and TLS) and requiring readsb's journal to show
+the host's own address from the PROXY header. `enable-public-front.sh`
+re-applies the 7444 (and, if needed, 80) rules after its ufw reset, reading
+`/etc/retina-adsb/feed-port.env`.
+
+Feeders (send **only your own receiver's data** — never re-fed central data):
+
+```sh
+readsb ... --net-connector=138.197.82.83,7444,beast_out        # plain (beast_reduce_out also fine)
+```
+
+TLS: an stunnel client with `connect = <origin>:7444`, `verifyChain = yes`,
+`checkHost`/`sni` = the certificate name, then `--net-connector=127.0.0.1,7444,beast_out`.
+As deployed the certificate is `adsb.retina.fm`, which resolves to
+Cloudflare, so TLS feeders connect to the origin IP with `checkHost`/`sni`
+set to that name — or add a DNS-only `feed.retina.fm` record and re-run
+with `--tls-host feed.retina.fm`.
+
+Who is feeding: `/run/readsb/clients.json` (every 10 s: source address,
+receiver id, rates) and `journalctl -u readsb-hub` (`disc:` lines, garbage
+closes). Bounds without identity: nginx per-address/per-connection limits
+above; readsb per-feeder message/position limits, garbage disconnect after
+512 undecodable bytes, `--json-reliable=2` (two consistent positions before
+an aircraft is served). 7444 is **outside the Cloudflare shield** (feeders
+reach the origin directly); a volumetric attack on it hits the droplet.
 
 ## Operator visualization (optional)
 
