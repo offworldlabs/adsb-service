@@ -26,7 +26,8 @@ Deployment artifacts for the Phase A data plane (DESIGN.md §8, ADR-0002/0003):
    cutover — prefer a reserved/floating IP so it never changes (this IP is
    the "stable egress IP" of spec §6.1 S1).
 2. **Designated contribution station.** The data entitlement rests on the
-   receiver at **47.46.206.146** actively feeding ADSBHub from its own
+   designated receiver (address kept out of this repository) actively
+   feeding ADSBHub from its own
    decoder (never hub/central data) — spec AI-04/§4.1.
 3. Ubuntu 24.04 host with `python3` (3.12), `python3-venv`, `rsync`, `git`,
    and outbound access to PyPI for the one-time venv build. readsb build

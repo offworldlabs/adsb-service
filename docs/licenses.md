@@ -79,8 +79,9 @@ production rollout.
   (core compliance-gate).
 - **Terms recheck: annual** (plan §4 / core compliance-gate). Last check
   2026-08-26; next due **before 2027-08-26** and before launch if earlier.
-- **Designated contribution station (AI-04 record):** the receiver at static
-  IP **47.46.206.146**, feeding ADSBHub directly from its own decoder —
+- **Designated contribution station (AI-04 record):** the receiver at its
+  static IP (address kept out of this repository), feeding ADSBHub directly
+  from its own decoder —
   never hub-aggregate or central-derived data. A0 must confirm it is
   actively feeding before ingest goes live.
 - **Data-access IP:** the droplet's static IP is whitelisted **separately**

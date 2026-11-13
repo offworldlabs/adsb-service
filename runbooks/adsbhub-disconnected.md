@@ -47,7 +47,7 @@ curl -4 -sS https://icanhazip.com            # current egress IP
         allow a few minutes. Prevention (plan.md A0): attach a **reserved/floating IP**
         to the droplet so the egress IP never changes across rebuilds.
      3. IPs match and still refused/timeout → provider side: is the contribution
-        station (47.46.206.146) actively feeding? Is ADSBHub itself up? → Escalation.
+        designated station actively feeding? Is ADSBHub itself up? → Escalation.
    - **Connected then idle-killed** (`idle_timeout`, 30 s no bytes) repeatedly →
      upstream is accepting but silent: provider-side data problem → Escalation.
 3. **`connected 1` but ADSBHubDown still firing** (no *valid* records) → records are
@@ -78,7 +78,7 @@ Pipeline dashboard: connection CONNECTED, bytes > 0, records `ok` flowing; ADSBH
 
 - ADSBHub side (port never opens with correct whitelist; station not feeding; provider
   outage): contact ADSBHub via the account email / adsbhub.org contact form. Reference
-  the account owning the whitelist and station 47.46.206.146.
+  the account owning the whitelist and the designated station.
 - Entitlement questions (terms, station eligibility): project owner — see plan.md A0.
 
 ## Post-incident
