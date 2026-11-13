@@ -7,14 +7,15 @@
 
 ## Our code
 
-`retina-adsb` 0.1.0 — **MIT** (`/LICENSE`, © 2026 Offworld Labs). Packages
+`retina-adsb` 0.1.0 — **AGPL-3.0-or-later** (`/LICENSE`, © 2026 Offworld Labs;
+relicensed from MIT 2026-11-13). Packages
 `adsbhub_adapter`, `serving_api` under `services/`.
 
 ## Vendored code (provenance detail: `vendor/VENDOR.md`)
 
 | Component | Commit | License | Compatibility |
 |---|---|---|---|
-| adsblol/api | `3c969c8` | BSD-3-Clause (LICENSE file). **Contradiction:** its pyproject classifier claims MIT — the LICENSE file governs; recorded here, report upstream. | Compatible with MIT redistribution (attribution + no-endorsement clauses); derived code in `services/serving_api/` retains BSD-3 attribution obligations. |
+| adsblol/api | `3c969c8` | BSD-3-Clause (LICENSE file). **Contradiction:** its pyproject classifier claims MIT — the LICENSE file governs; recorded here, report upstream. | Compatible with AGPL-3.0 redistribution (attribution + no-endorsement clauses); derived code in `services/serving_api/` retains BSD-3 attribution obligations, met by `/LICENSE-BSD-3`. |
 | adsblol/infra | `b4712ea` | BSD-3-Clause | Compatible; used as configuration reference only. |
 | wiedehopf/readsb | `d9a4c62` (v3.16.16) | GPL-3.0 | See boundary analysis below. |
 
@@ -24,16 +25,16 @@
   own user). All interaction is at arm's length: SBS over a loopback TCP
   socket, HTTP against its re-api, and files it writes to `/run/readsb`.
 - No RETINA code links against readsb (no shared objects, no headers, no
-  FFI); no readsb code is copied into MIT-licensed sources. Communication
+  FFI); no readsb code is copied into AGPL-licensed sources. Communication
   over sockets/files between separate programs does not create a combined/
-  derivative work, so the GPL does not extend to the MIT repo.
+  derivative work, so the GPL does not extend to the AGPL repo.
 - Obligations we do carry: if we distribute the readsb **binary**, we must
   provide corresponding source under GPL-3 — satisfied by vendoring the
   complete pinned source with `COPYING` intact (`vendor/readsb/`). The
   Phase A single-host deployment does not distribute binaries externally,
   but the source stays vendored regardless.
-- Conclusion: **process boundary holds; no derivative work; repo remains
-  MIT.**
+- Conclusion: **process boundary holds; no derivative work; the repo's own
+  licence (AGPL-3.0-or-later) governs our code.**
 
 ## Python runtime dependencies (verified via `.venv/bin/pip show`, 2026-08-29)
 
@@ -63,7 +64,7 @@ pytest-asyncio Apache-2.0, hypothesis MPL-2.0, httpx BSD-3, httpcore BSD-3,
 aioresponses MIT, orjson MPL-2.0/Apache/MIT, Pygments BSD-2, sortedcontainers
 Apache-2.0, iniconfig MIT, pluggy MIT, packaging Apache/BSD.
 
-**Verdict: no copyleft reaches shipped code.** Strongest licenses present are
+**Verdict: no copyleft dependency reaches shipped code.** Strongest licenses present are
 MPL-2.0 (file-level, unmodified: certifi at runtime, hypothesis/orjson
 dev-only) and GPL-3 behind the readsb process boundary. Regenerate this
 snapshot (`pip show` / freeze) as part of any dependency change and before
