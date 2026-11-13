@@ -7,7 +7,7 @@ name = "retina-adsb"
 version = "0.1.0"
 description = "RETINA ADS-B data plane, Phase A: ADSBHub ingest + adsb.lol-format serving"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = { text = "AGPL-3.0-or-later" }
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",

@@ -170,8 +170,8 @@ BEFORE FIRST START — ADSBHub prerequisites (plan.md A0):
     a missing/stale whitelist looks exactly like provider-down. If this
     host is ever rebuilt or moved, update the whitelist BEFORE cutover
     (prefer a reserved/floating IP so it never changes).
-  * The designated ADSBHub contribution station is the receiver at
-    47.46.206.146 — it must be actively feeding ADSBHub from its own
+  * The designated ADSBHub contribution station (its address is kept out
+    of this repository) must be actively feeding ADSBHub from its own
     decoder (never hub/central data) for the data entitlement to exist.
 
 Start (data-path order; enable for boot as you see fit):

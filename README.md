@@ -140,4 +140,26 @@ Later phases add the spec §30 canonical components (`proto/`, `retina-adsb-serv
 
 ## License
 
-[MIT](LICENSE) © 2026 Offworld Labs.
+Copyright (C) 2026 Offworld Labs
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero
+General Public License for more details.
+
+The full licence text is in [LICENSE](LICENSE).
+
+### Third-party code
+
+`services/serving_api/reapi.py` is adapted from
+[adsblol/api](https://github.com/adsblol/api), released under the BSD
+3-Clause License. That code remains available under the BSD 3-Clause
+License, and its copyright notice, conditions and disclaimer are reproduced
+in [LICENSE-BSD-3](LICENSE-BSD-3), as that licence requires. The combined
+work is distributed under the GNU Affero General Public License, version 3
+or later.

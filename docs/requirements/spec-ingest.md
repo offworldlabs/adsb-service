@@ -5,7 +5,7 @@
 
 ### [MUST] s1-upstream-conn (spec §6.1 S1 (line 190))
 
-Maintain ONE long-lived outbound TCP connection to `data.adsbhub.org:5002` from an ADSBHub-authorized stable egress IP (plan.md A0: the droplet's whitelisted static IP; contribution station is 47.46.206.146 but the data-access IP is whitelisted separately on the ADSBHub profile page).
+Maintain ONE long-lived outbound TCP connection to `data.adsbhub.org:5002` from an ADSBHub-authorized stable egress IP (plan.md A0: the droplet's whitelisted static IP; contribution station is the designated receiver but the data-access IP is whitelisted separately on the ADSBHub profile page).
 
 ### [MUST] s1-backoff (spec §6.1 S1 (line 191) + §24 (line 1714))
 
